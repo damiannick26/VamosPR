@@ -108,6 +108,13 @@
   .entry-h{display:flex;justify-content:space-between;align-items:center;color:var(--deep)}
   .ok{color:var(--palm);font-weight:700;font-size:.82rem}
   .muted-note{color:var(--muted);font-size:.82rem;font-style:italic}
+  .pn{margin-top:8px;border-top:2px dashed var(--line);padding-top:6px;white-space:normal;text-align:left}
+  .pnote{background:#f4fbf9;border-left:4px solid var(--ocean);border-radius:8px;padding:4px 10px;margin:4px 0;font-size:.88rem;white-space:pre-wrap}
+  .pnote b{color:var(--deep)}
+  .pn summary{cursor:pointer;font-weight:700;color:var(--deep);font-size:.85rem;padding:2px 0}
+  .pn textarea{min-height:70px;margin-top:6px}
+  .pn-wrap{width:0;min-width:100%;white-space:normal}
+  .tbl tr.pnrow td{border-top:0;padding-top:0}
 </style>
 </head>
 <body>
@@ -150,7 +157,7 @@ const TABS = ["chat","overview","budget",...Object.keys(CATS)];
 const TAB_LABEL = { chat:"💬 Chat", overview:"🗺️ Overview", budget:"💰 Budget", ...Object.fromEntries(Object.entries(CATS).map(([k,v])=>[k,v.icon+" "+v.label])) };
 
 let db, tripCode = ls.get("pr_trip"), me = ls.get("pr_name"), tab = ls.get("pr_tab") || "overview";
-let unsubs = [], data = {}, messages = [];
+let unsubs = [], data = {}, messages = [], pn = [];
 let overview = { text:"" };
 let header = { title:"Vamos PR", subtitle:"Our island plans, shared · Feb 2027" };
 let editing = null, editingHeader = false;
@@ -186,6 +193,7 @@ const tripRef = (...p) => [db, "trips", tripCode, ...p];
 function startListening(){
   unsubs.forEach(u=>u()); unsubs = []; data = {};
   for(const cat of Object.keys(CATS)){
+    if(cat==="lodging") continue;          // lodging lives in budget_airbnb
     unsubs.push(onSnapshot(query(collection(...tripRef(cat)), orderBy("createdAt","asc")), snap => {
       data[cat] = snap.docs.map(d => ({id:d.id, ...d.data()}));
       if(tab===cat && !editing && !lForm) renderBody();
@@ -204,6 +212,12 @@ function startListening(){
   unsubs.push(onSnapshot(doc(...tripRef("meta","header")), s => {
     if(s.exists()) header = { ...header, ...s.data() };
     if(!editingHeader) renderHeaderText();
+  }, showErr));
+  unsubs.push(onSnapshot(collection(...tripRef("pnotes")), snap => {
+    pn = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    if(["chat","overview","budget"].includes(tab) || editing || lForm) return;
+    if(isTyping()){ pendingRender = true; return; }
+    renderBody();
   }, showErr));
   listenBudget();
 }
@@ -304,7 +318,9 @@ function renderOverview(body){
   body.innerHTML = `${budgetSummaryCard()}<div class="row">${tiles}</div>
     <div class="card plain"><b>📝 Trip notes</b> <span class="meta">anyone can edit</span>
     <textarea id="ovText" style="min-height:240px">${esc(overview.text || DEFAULT_OVERVIEW)}</textarea>
-    <div class="actions"><button class="btn" id="ovSave">💾 Save notes</button><span class="saved" id="ovMsg"></span></div></div>`;
+    <div class="actions"><button class="btn" id="ovSave">💾 Save notes</button><span class="saved" id="ovMsg"></span></div></div>
+    <div class="card plain"><button class="btn" id="xlBtn">📤 Export to Excel</button> <span class="saved" id="xlMsg"></span></div>`;
+  document.getElementById("xlBtn").onclick = () => exportExcel(document.getElementById("xlBtn"), document.getElementById("xlMsg"));
   body.querySelectorAll("[data-go]").forEach(c => c.onclick = () => document.querySelector(`#nav [data-t="${c.dataset.go}"]`).click());
   document.getElementById("ovSave").onclick = async () => {
     try {
@@ -313,6 +329,38 @@ function renderOverview(body){
     } catch(err){ showErr(err); }
   };
 }
+
+/*NOTES_START*/
+/* ---------- Personal notes: each person writes their own note under any entry; everyone sees all of them ---------- */
+const openNotes = new Set();
+const slug = s => String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") || "anon";
+const pnKey = (cat,id) => cat+"__"+id;
+const pnotesFor = (cat,id) => pn.filter(n => n.cat===cat && n.itemId===id).sort((a,b) => String(a.name).localeCompare(String(b.name)));
+function pnHTML(cat,id){
+  const list = pnotesFor(cat,id), mine = list.find(n => slug(n.name)===slug(me)), key = pnKey(cat,id);
+  return `<div class="pn">${list.map(n => `<div class="pnote"><b>${esc(n.name)}:</b> ${esc(n.text)}</div>`).join("")}
+    <details data-pk="${esc(key)}" ${openNotes.has(key)?"open":""}><summary>✍️ ${mine?"Edit my note":"Add my note"}</summary>
+      <textarea maxlength="1000" placeholder="Only you can change your note">${esc(mine?.text||"")}</textarea>
+      <div class="actions"><button class="btn small" data-pnsave data-cat="${esc(cat)}" data-id="${esc(id)}">💾 Save note</button>${mine?`<button class="btn ghost small" data-pndel data-cat="${esc(cat)}" data-id="${esc(id)}">🗑️ Remove</button>`:""}</div></details></div>`;
+}
+async function saveNote(cat,id,text){
+  const ref = doc(...tripRef("pnotes", `${cat}__${id}__${slug(me)}`)); text = text.trim();
+  if(!text) return deleteDoc(ref);
+  return setDoc(ref, { cat, itemId:id, name:me, text, updatedAt:serverTimestamp() });
+}
+async function dropNotes(cat,id){
+  const list = pnotesFor(cat,id); if(!list.length) return;
+  const wb = writeBatch(db); list.forEach(n => wb.delete(doc(...tripRef("pnotes",n.id)))); await wb.commit();
+}
+document.addEventListener("toggle", e => { const d = e.target; if(d.matches && d.matches("details[data-pk]")) d.open ? openNotes.add(d.dataset.pk) : openNotes.delete(d.dataset.pk); }, true);
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-pnsave],[data-pndel]"); if(!b) return;
+  const { cat, id } = b.dataset, box = b.closest(".pn"), t = box.querySelector("textarea");
+  openNotes.delete(pnKey(cat,id));
+  try{ await saveNote(cat, id, b.hasAttribute("data-pndel") ? "" : t.value); }catch(err){ showErr(err); }
+  if(!isTyping()) renderBody();
+});
+/*NOTES_END*/
 
 /* ---------- Categories ---------- */
 function renderCategory(body, cat){
@@ -331,6 +379,7 @@ function itemCard(cat,i){
     <div class="meta">${i.date?`<span>📅 ${esc(i.date)}</span>`:""}${costLine(cat,i)}${i.who?`<span>👥 ${esc(i.who)}</span>`:""}${link}</div>
     ${i.notes?`<div style="white-space:pre-wrap">${esc(i.notes)}</div>`:""}
     <div class="meta">added by ${esc(i.addedBy||"?")}${i.updatedBy&&i.updatedBy!==i.addedBy?` · edited by ${esc(i.updatedBy)}`:""}</div>
+    ${pnHTML(cat,i.id)}
     <div class="actions">
       <button class="btn ghost small" data-act="vote" data-id="${i.id}">${voted?"👍 Voted":"👍 Vote"} ${votes.length||""}</button>
       <button class="btn ghost small" data-act="edit" data-id="${i.id}">✏️ Edit</button>
@@ -342,7 +391,7 @@ async function itemAction(cat,id,act){
   const item = (data[cat]||[]).find(x=>x.id===id); if(!item) return;
   try{
     if(act==="vote") await updateDoc(doc(...tripRef(cat,id)), { votes: (item.votes||[]).includes(me) ? arrayRemove(me) : arrayUnion(me) });
-    if(act==="del" && confirm(`Delete "${item.title}"?`)) await deleteDoc(doc(...tripRef(cat,id)));
+    if(act==="del" && confirm(`Delete "${item.title}"?`)){ await deleteDoc(doc(...tripRef(cat,id))); await dropNotes(cat,id); }
     if(act==="edit") openForm(cat, item);
   }catch(e){ showErr(e); }
 }
@@ -521,7 +570,7 @@ function refreshBudget(){
   if(isTyping()){ pendingRender = true; return; }
   renderBody();
 }
-document.addEventListener("focusout", () => setTimeout(() => { if(pendingRender && !isTyping() && !(tab==="lodging" && lForm)){ pendingRender = false; renderBody(); } }, 0));
+document.addEventListener("focusout", () => setTimeout(() => { if(pendingRender && !isTyping() && !editing && !(tab==="lodging" && lForm)){ pendingRender = false; renderBody(); } }, 0));
 
 /* Spreadsheet activities/flights become normal items on the Activities and Flights tabs */
 function seedItemWrites(b, flight){
@@ -631,18 +680,11 @@ function vanHTML(){
 }
 
 /* ---------- Lodging tab (the Airbnb comparison, now the single place for lodging) ---------- */
-const oldLodging = () => (data.lodging||[]).filter(o => !bAir.some(a => a.id==="old-"+o.id));
-function importBanner(){
-  const old = oldLodging(); if(!old.length) return "";
-  return `<div class="card c-transport"><b>📥 ${old.length} earlier lodging ${old.length===1?"entry":"entries"} found</b>
-    <div class="meta">Saved before the Lodging tab was merged. They import under San Juan with no price; set the area and cost afterward.</div>
-    <div class="actions"><button class="btn" data-do="importOld">Import ${old.length} ${old.length===1?"entry":"entries"}</button></div></div>`;
-}
 function renderLodging(body){
   lForm = false;
   body.innerHTML = `<div class="card plain"><b>🏡 Lodging options</b>
     <div class="meta">Mark a listing <b>Booked</b> to add it to the 💰 Budget. Lodging is split among the group.</div>
-    <div class="actions"><button class="btn" data-do="addAir" data-reg="sj">+ Add listings</button></div></div>${importBanner()}<div id="lform"></div>${lodgingHTML()}`;
+    <div class="actions"><button class="btn" data-do="addAir" data-reg="sj">+ Add listings</button></div></div><div id="lform"></div>${lodgingHTML()}`;
   body.onchange = onBudgetChange; body.onclick = onBudgetClick;
 }
 function lodgingHTML(){
@@ -666,7 +708,8 @@ function lodgingHTML(){
         <td><button class="btn ghost small" data-do="vote" data-id="${esc(x.id)}">👍 ${votes.length||""}${voted?" ✓":""}</button></td>
         <td>${f("notes","text",190)}</td>
         <td>${f("link","text",120,'placeholder="https://…"')}</td>
-        <td><button class="btn ghost small" data-do="delete" data-col="budget_airbnb" data-id="${esc(x.id)}">🗑️</button></td></tr>`;
+        <td><button class="btn ghost small" data-do="delete" data-col="budget_airbnb" data-id="${esc(x.id)}">🗑️</button></td></tr>
+        <tr class="pnrow ${booked?"sel":""}"><td colspan="18"><div class="pn-wrap">${pnHTML("lodging",x.id)}</div></td></tr>`;
     }).join("");
     return `<div class="card c-lodging"><b>🏠 ${label}</b> <span class="meta">${nights} nights${bset["label"+k]?` · ${esc(bset["label"+k])}`:""}</span>
       <div class="tbl"><table><thead><tr><th>Listing</th><th>Status</th><th>Min nights</th><th>Price</th><th>Price is</th><th>Per night</th><th>Stay</th><th>Per person</th><th>Bedrooms</th><th>Beds</th><th>Baths</th><th>Beach</th><th>Parking</th><th>Rating</th><th>Votes</th><th>Notes</th><th>Link</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="18" class="empty">No listings yet.</td></tr>`}</tbody></table></div>
@@ -688,20 +731,146 @@ async function onBudgetClick(e){
     if(d.do==="goto"){ bTab = d.to; ls.set("pr_btab",bTab); return renderBody(); }
     if(d.do==="gotoTab") return document.querySelector(`#nav [data-t="${d.to}"]`).click();
     if(d.do==="vote"){ const x = bAir.find(z => z.id===d.id); if(x) await updateDoc(doc(...tripRef("budget_airbnb",d.id)), { votes:(x.votes||[]).includes(me) ? arrayRemove(me) : arrayUnion(me) }); }
-    if(d.do==="delete" && confirm("Delete this row?")) await deleteDoc(doc(...tripRef(d.col,d.id)));
-    if(d.do==="importOld"){
-      const old = oldLodging(); if(!old.length) return;
-      const wb = writeBatch(db);
-      old.forEach((o,i) => {
-        const notes = [o.notes, o.date && `Dates: ${o.date}`, o.cost && `Cost: ${o.cost}`, o.who && `Who: ${o.who}`].filter(Boolean).join(" · ");
-        wb.set(doc(...tripRef("budget_airbnb","old-"+o.id)), { region:"sj", name:o.title||"Untitled", minDays:1, price:0, priceType:"night", status:["Idea","Considering","Booked"].includes(o.status)?o.status:"Idea", votes:o.votes||[], bedrooms:null, beds:null, baths:null, beach:"", parking:"", rating:null, link:o.link||"", notes, order:Date.now()+i, addedBy:o.addedBy||me });
-      });
-      await wb.commit();
-    }
+    if(d.do==="delete" && confirm("Delete this row?")){ await deleteDoc(doc(...tripRef(d.col,d.id))); if(d.col==="budget_airbnb") await dropNotes("lodging",d.id); }
     if(d.do==="addVan") await addDoc(collection(...tripRef("budget_van")), { name:"New line", rate:0, qty:null, note:"", order:Date.now() });
     if(d.do==="addAir") openLodgingForm(d.reg||"sj");
   }catch(err){ showErr(err); }
 }
+
+/*XLSX_START*/
+/* ---------- Excel export: one workbook, one sheet per section, totals as live formulas ---------- */
+const SHEET = { flights:"Flights", transport:"Transport", activities:"Activities", places:"Must see", food:"Food-Drink" };
+const qs = n => `'${n}'`;
+function buildWorkbook(ExcelJS){
+  const wb = new ExcelJS.Workbook(); wb.creator = me || "Vamos PR"; wb.created = new Date(); wb.calcProperties = { fullCalcOnLoad:true };
+  const E = calcEstimate(), n = E.n, nights = E.nights;
+  const MONEY = '"$"#,##0.00', PEOPLE = `MAX(1,${qs("Estimate")}!$B$4)`;
+  const W = {}; ["Estimate","Lodging","Van rental",...Object.values(SHEET),"Trip notes","Chat"].forEach(t => W[t] = wb.addWorksheet(t));
+  const hdr = (ws,row) => ws.getRow(row).eachCell(c => { c.font = { bold:true, color:{argb:"FFFFFFFF"} }; c.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0A8F9C"} }; c.alignment = { vertical:"middle", wrapText:true }; });
+  const sect = (ws,row) => ws.getRow(row).eachCell(c => { c.font = { bold:true, color:{argb:"FF066673"} }; c.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFFFF1CC"} }; });
+  const shade = (ws,row,argb) => ws.getRow(row).eachCell({includeEmpty:true}, c => { c.fill = { type:"pattern", pattern:"solid", fgColor:{argb} }; });
+  const widths = (ws,w) => w.forEach((x,i) => ws.getColumn(i+1).width = x);
+  const fmt = (ws,cols,f) => cols.forEach(c => ws.getColumn(c).numFmt = f);
+  const gnotes = (cat,id) => pnotesFor(cat,id).map(x => `${x.name}: ${x.text}`).join("\n");
+  const link = u => /^https?:\/\//i.test(u||"") ? { text:u, hyperlink:u } : (u||"");
+  const blank = v => (v===null || v===undefined || v==="") ? null : v;
+
+  /* Lodging */
+  const L = W["Lodging"], lodRow = {};
+  L.addRow(["Area","Listing","Status","Min nights","Price","Price is","Per night","Nights","Stay total","Per person","Bedrooms","Beds","Baths","Beach","Parking","Rating","Votes","Link","Notes","Everyone's notes"]); hdr(L,1);
+  REGIONS.forEach(([reg,label,k],idx) => bAir.filter(x => x.region===reg).forEach(x => {
+    const r = L.rowCount+1, nt = num(bset["nights"+k]), pnight = perNight(x), stay = pnight*nt;
+    L.addRow([label, x.name, x.status||"Idea", blank(x.minDays), blank(x.price), x.priceType==="stay"?"min-stay total":"per night",
+      { formula:`IF(F${r}="min-stay total",E${r}/MAX(1,D${r}),E${r})`, result:pnight },
+      { formula:`${qs("Estimate")}!$B$${5+idx}`, result:nt },
+      { formula:`G${r}*H${r}`, result:stay },
+      { formula:`I${r}/${PEOPLE}`, result:stay/n },
+      blank(x.bedrooms), blank(x.beds), blank(x.baths), x.beach||"", x.parking||"", blank(x.rating), (x.votes||[]).length, link(x.link), x.notes||"", gnotes("lodging",x.id)]);
+    lodRow[x.id] = r; if(x.status==="Booked") shade(L,r,"FFE6F7F4");
+  }));
+  widths(L,[11,36,12,10,10,15,11,8,12,12,10,7,7,8,11,8,7,30,34,44]); fmt(L,[5,7,9,10],MONEY);
+  L.getColumn(19).alignment = L.getColumn(20).alignment = { wrapText:true, vertical:"top" };
+  L.views = [{ state:"frozen", xSplit:2, ySplit:1 }]; L.autoFilter = { from:"A1", to:"T1" };
+
+  /* Van rental */
+  const V = E.van, Vs = W["Van rental"];
+  Vs.addRow(["Passenger van rental"]); Vs.getRow(1).font = { bold:true, size:14 };
+  Vs.addRow(["Status", bset.vanStatus||"Idea"]);
+  Vs.addRow(["Days", { formula:`${qs("Estimate")}!$B$8`, result:nights }]);
+  Vs.addRow([]); Vs.addRow(["Line","Rate","Qty","Note","Amount"]); hdr(Vs,5);
+  Vs.addRow(["1 week", num(bset.vanWeek), { formula:"IF($B$3>=7,1,0)", result:nights>=7?1:0 }, "", { formula:"B6*C6", result:V.week }]);
+  Vs.addRow(["Per day", num(bset.vanDay), { formula:"IF($B$3>=7,$B$3-7,$B$3)", result:V.extra }, nights>=7?"days beyond 7":"all days", { formula:"B7*C7", result:V.dayCost }]);
+  V.lines.forEach(l => { const r = Vs.rowCount+1, auto = (l.qty===null||l.qty===undefined||l.qty==="");
+    Vs.addRow([l.name, num(l.rate), auto ? { formula:"$B$3", result:nights } : num(l.qty), l.note||"", { formula:`B${r}*C${r}`, result:l.amt }]); });
+  const vLast = Vs.rowCount, vSub = vLast+1, vTax = vLast+2, vTot = vLast+3;
+  Vs.addRow(["Subtotal","","","",{ formula:`SUM(E6:E${vLast})`, result:V.subtotal }]);
+  Vs.addRow(["Taxes (%)", num(bset.taxPct), "", "", { formula:`E${vSub}*B${vTax}/100`, result:V.tax }]);
+  Vs.addRow(["Total","","","",{ formula:`E${vSub}+E${vTax}`, result:V.total }]);
+  Vs.addRow(["Per person","","","",{ formula:`E${vTot}/${PEOPLE}`, result:V.pp }]);
+  [vSub,vTax,vTot,vTot+1].forEach(r => Vs.getRow(r).font = { bold:true }); sect(Vs,vTot);
+  widths(Vs,[28,12,8,22,14]); fmt(Vs,[2,5],MONEY); Vs.getCell(`B${vTax}`).numFmt = "0.00"; Vs.getCell("B3").numFmt = "0";
+  Vs.getColumn(3).numFmt = "0.##";
+
+  /* Flights, Transport, Activities, Must see, Food/Drink */
+  const catRow = {};
+  Object.keys(SHEET).forEach(cat => {
+    const ws = W[SHEET[cat]]; catRow[cat] = {}; const items = data[cat] || [];
+    ws.addRow(["Title","Date","Status","Amount","Who pays","Group cost","Per person","Counted","Who's in","Cost note","Votes","Link","Notes","Everyone's notes","Added by"]); hdr(ws,1);
+    items.forEach(i => { const r = ws.rowCount+1, c = itemCost(cat,i,n);
+      ws.addRow([i.title||"", i.date||"", i.status||"Idea", blank(i.amount), typeLabel(c.type),
+        { formula:`IF(E${r}="Each person pays",D${r}*${PEOPLE},D${r})`, result:c.group },
+        { formula:`F${r}/${PEOPLE}`, result:c.pp },
+        { formula:`IF(C${r}="Booked","Yes","No")`, result:i.status==="Booked"?"Yes":"No" },
+        i.who||"", i.cost||"", (i.votes||[]).length, link(i.link), i.notes||"", gnotes(cat,i.id), i.addedBy||""]);
+      catRow[cat][i.id] = r; if(i.status==="Booked") shade(ws,r,"FFE6F7F4"); });
+    if(items.length){ const last = ws.rowCount, bt = sum(items.filter(i => i.status==="Booked").map(i => itemCost(cat,i,n).group));
+      ws.addRow([]); ws.addRow(["Booked total","","","","",{ formula:`SUMIF(C2:C${last},"Booked",F2:F${last})`, result:bt },{ formula:`F${last+2}/${PEOPLE}`, result:bt/n }]);
+      ws.getRow(last+2).font = { bold:true }; sect(ws,last+2); }
+    widths(ws,[34,16,12,11,20,13,13,9,18,22,7,30,40,44,14]); fmt(ws,[4,6,7],MONEY);
+    ws.getColumn(13).alignment = ws.getColumn(14).alignment = { wrapText:true, vertical:"top" };
+    ws.views = [{ state:"frozen", xSplit:1, ySplit:1 }]; ws.autoFilter = { from:"A1", to:"O1" };
+  });
+
+  /* Estimate */
+  const Es = W["Estimate"];
+  Es.addRow([header.title||"Vamos PR"]); Es.getRow(1).font = { bold:true, size:16, color:{argb:"FF066673"} };
+  Es.addRow([header.subtitle||""]); Es.addRow([]);
+  Es.addRow(["People", n]);
+  REGIONS.forEach(([reg,label,k]) => Es.addRow([`${label} nights`, num(bset["nights"+k]), bset["label"+k]||""]));
+  Es.addRow(["Total nights", { formula:"SUM(B5:B7)", result:nights }]);
+  [4,5,6,7,8].forEach(r => Es.getCell(`A${r}`).font = { bold:true }); Es.getCell("B4").fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFFFF1CC"} };
+  Es.addRow([]);
+  Es.addRow(["Booked items (counted)","How it's paid","Group cost","Per person"]); hdr(Es,10);
+  const first = 11; 
+  const put = (label,how,ref,val) => { const r = Es.rowCount+1; Es.addRow([label,how,{ formula:ref, result:val },{ formula:`C${r}/${PEOPLE}`, result:val/n }]); };
+  E.lodging.forEach(Lg => Lg.booked.forEach(b => put(`Lodging · ${Lg.label}: ${b.listing.name} (${Lg.nights} nights)`,"Split among the group",`${qs("Lodging")}!I${lodRow[b.listing.id]}`,b.total)));
+  if(E.vanCounted) put(`Passenger van (${nights} days)`,"Split among the group",`${qs("Van rental")}!E${vTot}`,E.van.total);
+  E.cats.forEach(c => c.booked.forEach(x => put(`${CATS[c.cat].label}: ${x.i.title}`, typeLabel(x.type)+(x.type==="each"?` (${money(x.amt)} × ${n})`:""), `${qs(SHEET[c.cat])}!F${catRow[c.cat][x.i.id]}`, x.group)));
+  const lastC = Es.rowCount, tr = lastC+1;
+  Es.addRow(["TOTAL BOOKED","", lastC>=first ? { formula:`SUM(C${first}:C${lastC})`, result:E.total } : 0, { formula:`C${tr}/${PEOPLE}`, result:E.total/n }]);
+  Es.getRow(tr).font = { bold:true, size:12 }; sect(Es,tr);
+  Es.addRow([]); Es.addRow(["Not booked yet (not counted)","","Group cost","Per person"]); hdr(Es,Es.rowCount);
+  const soft = (label,how,val,ref) => { const r = Es.rowCount+1; Es.addRow([label,how,ref?{ formula:ref, result:val }:val,{ formula:`C${r}/${PEOPLE}`, result:val/n }]); Es.getRow(r).font = { italic:true, color:{argb:"FF5C7378"} }; };
+  E.lodging.forEach(Lg => { if(!Lg.booked.length && Lg.preview) soft(`Lodging · ${Lg.label}: ${Lg.preview.name} (preview)`,"Split among the group",Lg.previewTotal,`${qs("Lodging")}!I${lodRow[Lg.preview.id]}`); });
+  if(!E.vanCounted) soft(`Passenger van (${nights} days)`,"Split among the group",E.van.total,`${qs("Van rental")}!E${vTot}`);
+  E.cats.forEach(c => { if(c.other.length) soft(`${CATS[c.cat].label}: ${c.other.length} not booked`,"",c.potential); });
+  widths(Es,[58,34,16,16]); fmt(Es,[3,4],MONEY); Es.getCell("B4").numFmt = "0"; Es.getCell("B8").numFmt = "0";
+  Es.getRow(9).height = 6;
+
+  /* Trip notes + everyone's notes */
+  const T = W["Trip notes"];
+  T.addRow(["Trip notes"]); T.getRow(1).font = { bold:true, size:14 };
+  T.addRow([overview.text || ""]); T.getCell("A2").alignment = { wrapText:true, vertical:"top" };
+  T.addRow([]); T.addRow(["Section","Entry","Person","Note"]); hdr(T,4);
+  const titleOf = (cat,id) => cat==="lodging" ? (bAir.find(x => x.id===id)||{}).name : ((data[cat]||[]).find(x => x.id===id)||{}).title;
+  [...pn].sort((a,b) => (a.cat+a.itemId+a.name).localeCompare(b.cat+b.itemId+b.name)).forEach(x => T.addRow([CATS[x.cat]?.label||x.cat, titleOf(x.cat,x.itemId)||"(deleted)", x.name, x.text]));
+  widths(T,[22,40,16,80]); T.getColumn(4).alignment = { wrapText:true, vertical:"top" }; T.mergeCells("A2:D2"); T.getRow(2).height = Math.min(400, 16*Math.max(3,(overview.text||"").split("\n").length+1));
+
+  /* Chat */
+  const C = W["Chat"]; C.addRow(["Time","Name","Message"]); hdr(C,1);
+  messages.forEach(m => C.addRow([m.createdAt?.toDate ? m.createdAt.toDate() : "", m.name||"", m.text||""]));
+  widths(C,[20,16,90]); C.getColumn(1).numFmt = "mmm d, yyyy h:mm AM/PM"; C.getColumn(3).alignment = { wrapText:true, vertical:"top" }; C.views = [{ state:"frozen", ySplit:1 }];
+  return wb;
+}
+function loadExcelJS(){
+  if(window.ExcelJS) return Promise.resolve();
+  const urls = ["https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js","https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"];
+  const tryLoad = i => new Promise((res,rej) => { const el = document.createElement("script"); el.src = urls[i]; el.onload = res; el.onerror = () => { el.remove(); i+1<urls.length ? tryLoad(i+1).then(res,rej) : rej(new Error("Could not load the Excel library")); }; document.head.appendChild(el); });
+  return tryLoad(0);
+}
+async function exportExcel(btn,msg){
+  btn.disabled = true; if(msg) msg.textContent = "Building…";
+  try{
+    await loadExcelJS();
+    const buf = await buildWorkbook(window.ExcelJS).xlsx.writeBuffer();
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([buf], { type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    a.download = `Vamos_PR_${new Date().toISOString().slice(0,10)}.xlsx`; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    if(msg) msg.textContent = "Downloaded ✔";
+  }catch(err){ console.error(err); if(msg) msg.textContent = "Export failed: "+(err.message||err); }
+  btn.disabled = false;
+}
+/*XLSX_END*/
 
 /* ---------- Fit tables to the window: boxes grow to show all their text, and the whole table (font + boxes) scales down to fit ---------- */
 const FIT_MIN = 0.55;                       // below this, the table scrolls sideways instead
