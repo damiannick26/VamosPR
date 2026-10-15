@@ -87,6 +87,22 @@
   .fontbtn{position:fixed;right:12px;bottom:12px;z-index:9}
   .tile{flex:1 1 120px;text-align:center;cursor:pointer}
   .tile .big{font-size:1.8rem}
+  .subtabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .subtabs button{border:2px solid var(--line);background:#fff;color:var(--deep);padding:8px 14px;border-radius:99px;font:inherit;font-weight:700;font-size:.85rem;cursor:pointer}
+  .subtabs button.on{background:var(--ocean);color:#fff;border-color:var(--ocean)}
+  .tbl{overflow-x:auto;margin:8px 0}
+  .tbl table{border-collapse:collapse;width:100%;font-size:.85rem}
+  .tbl th{text-align:left;font-size:.72rem;color:var(--muted);padding:4px 6px;white-space:nowrap}
+  .tbl td{padding:4px 6px;border-top:1px solid var(--line);vertical-align:middle}
+  .tbl input,.tbl select{width:auto;min-width:50px;padding:5px 8px;font-size:.85rem;border-radius:8px}
+  .tbl tr.sel td{background:#e6f7f4}
+  .tbl tr.tot td{font-weight:700;border-top:3px solid var(--ocean);font-size:1rem}
+  .warn{color:#c0301a;font-weight:700;font-size:.75rem}
+  .tbl tr.muted td{color:var(--muted);font-style:italic;background:#fbf4e2}
+  .entry{border:2px dashed var(--line);border-radius:14px;padding:6px 12px 10px;margin:10px 0;background:#fffdf7}
+  .entry-h{display:flex;justify-content:space-between;align-items:center;color:var(--deep)}
+  .ok{color:var(--palm);font-weight:700;font-size:.82rem}
+  .muted-note{color:var(--muted);font-size:.82rem;font-style:italic}
 </style>
 </head>
 <body>
@@ -106,7 +122,7 @@ const firebaseConfig = {
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot,
-         query, orderBy, serverTimestamp, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+         query, orderBy, serverTimestamp, arrayUnion, arrayRemove, writeBatch, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const $app = document.getElementById("app");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -121,12 +137,12 @@ const CATS = {
   lodging:   { label:"Lodging",     icon:"🏡", titlePh:"e.g. Beach house in Rincón",      dateLabel:"Dates", statuses:["Idea","Considering","Booked"] },
   transport: { label:"Transport",   icon:"🚗", titlePh:"e.g. Rental car from SJU",        dateLabel:"Date",  statuses:["Idea","Considering","Booked"] },
   flights:   { label:"Flights",     icon:"✈️", titlePh:"e.g. CLE → SJU, Feb 9",           dateLabel:"Date",  statuses:["Idea","Considering","Booked"] },
-  activities:{ label:"Activities",  icon:"🤿", titlePh:"e.g. Kayak the bioluminescent bay", dateLabel:"Date", statuses:["Idea","Planned","Done"] },
-  places:    { label:"Places",      icon:"🏝️", titlePh:"e.g. El Yunque",                  dateLabel:"When",  statuses:["Idea","Planned","Done"] },
-  food:      { label:"Restaurants", icon:"🍹", titlePh:"e.g. Lechonera in Guavate",       dateLabel:"When",  statuses:["Idea","Planned","Done"] },
+  activities:{ label:"Activities",  icon:"🤿", titlePh:"e.g. Kayak the bioluminescent bay", dateLabel:"Date", statuses:["Idea","Planned","Booked","Done"] },
+  places:    { label:"Places",      icon:"🏝️", titlePh:"e.g. El Yunque",                  dateLabel:"When",  statuses:["Idea","Planned","Booked","Done"] },
+  food:      { label:"Restaurants", icon:"🍹", titlePh:"e.g. Lechonera in Guavate",       dateLabel:"When",  statuses:["Idea","Planned","Booked","Done"] },
 };
-const TABS = ["chat","overview",...Object.keys(CATS)];
-const TAB_LABEL = { chat:"💬 Chat", overview:"🗺️ Overview", ...Object.fromEntries(Object.entries(CATS).map(([k,v])=>[k,v.icon+" "+v.label])) };
+const TABS = ["chat","overview","budget",...Object.keys(CATS)];
+const TAB_LABEL = { chat:"💬 Chat", overview:"🗺️ Overview", budget:"💰 Budget", ...Object.fromEntries(Object.entries(CATS).map(([k,v])=>[k,v.icon+" "+v.label])) };
 
 let db, tripCode = ls.get("pr_trip"), me = ls.get("pr_name"), tab = ls.get("pr_tab") || "overview";
 let unsubs = [], data = {}, messages = [];
@@ -169,6 +185,7 @@ function startListening(){
       data[cat] = snap.docs.map(d => ({id:d.id, ...d.data()}));
       if(tab===cat && !editing) renderBody();
       if(tab==="overview" && !isTyping()) renderBody();
+      if(tab==="budget") refreshBudget();
     }, showErr));
   }
   unsubs.push(onSnapshot(query(collection(...tripRef("messages")), orderBy("createdAt","asc")), snap => {
@@ -183,6 +200,7 @@ function startListening(){
     if(s.exists()) header = { ...header, ...s.data() };
     if(!editingHeader) renderHeaderText();
   }, showErr));
+  listenBudget();
 }
 const isTyping = () => document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
 
@@ -232,8 +250,11 @@ function editHeader(){
 
 function renderBody(){
   const body = document.getElementById("body"); if(!body) return;
+  body.onchange = null; body.onclick = null;
   if(tab==="chat") return renderChat(body);
   if(tab==="overview") return renderOverview(body);
+  if(tab==="budget") return renderBudget(body);
+  if(tab==="lodging") return renderLodging(body);
   renderCategory(body, tab);
 }
 
@@ -273,8 +294,8 @@ const DEFAULT_OVERVIEW = `Who's going & when
 
 Notes, reminders, group links…`;
 function renderOverview(body){
-  const tiles = Object.entries(CATS).map(([k,v])=>`<div class="card tile c-${k}" data-go="${k}"><div class="big">${v.icon}</div><b>${(data[k]||[]).length}</b><div class="meta" style="justify-content:center">${v.label}</div></div>`).join("");
-  body.innerHTML = `<div class="row">${tiles}</div>
+  const tiles = Object.entries(CATS).map(([k,v])=>`<div class="card tile c-${k}" data-go="${k}"><div class="big">${v.icon}</div><b>${(k==="lodging" ? bAir : (data[k]||[])).length}</b><div class="meta" style="justify-content:center">${v.label}</div></div>`).join("");
+  body.innerHTML = `${budgetSummaryCard()}<div class="row">${tiles}</div>
     <div class="card plain"><b>📝 Trip notes</b> <span class="meta">anyone can edit · click Save when done</span>
     <textarea id="ovText" style="min-height:240px">${esc(overview.text || DEFAULT_OVERVIEW)}</textarea>
     <div class="actions"><button class="btn" id="ovSave">💾 Save notes</button><span class="saved" id="ovMsg"></span></div></div>`;
@@ -301,7 +322,7 @@ function itemCard(cat,i){
   const link = i.link ? `<a href="${esc(/^https?:\/\//.test(i.link)?i.link:"https://"+i.link)}" target="_blank" rel="noopener">link ↗</a>` : "";
   return `<div class="card item c-${cat}">
     <h3>${esc(i.title)} <span class="tag ${esc(i.status)}">${esc(i.status||"Idea")}</span></h3>
-    <div class="meta">${i.date?`<span>📅 ${esc(i.date)}</span>`:""}${i.cost?`<span>💵 ${esc(i.cost)}</span>`:""}${i.who?`<span>👥 ${esc(i.who)}</span>`:""}${link}</div>
+    <div class="meta">${i.date?`<span>📅 ${esc(i.date)}</span>`:""}${costLine(cat,i)}${i.who?`<span>👥 ${esc(i.who)}</span>`:""}${link}</div>
     ${i.notes?`<div style="white-space:pre-wrap">${esc(i.notes)}</div>`:""}
     <div class="meta">added by ${esc(i.addedBy||"?")}${i.updatedBy&&i.updatedBy!==i.addedBy?` · edited by ${esc(i.updatedBy)}`:""}</div>
     <div class="actions">
@@ -320,30 +341,342 @@ async function itemAction(cat,id,act){
   }catch(e){ showErr(e); }
 }
 
+/*BATCH_START*/
+/* ---------- Multi-entry add forms: Tab past the last field to start the next entry ---------- */
+const bnv = v => v==="" ? null : Number(v);
+const entryShell = (n,inner,removable) => `<div class="entry"><div class="entry-h"><b>Entry <span class="en">${n}</span></b>${removable?`<button type="button" class="btn ghost small" data-rm tabindex="-1">✕ remove</button>`:""}</div>${inner}</div>`;
+const renumber = box => box.querySelectorAll(".entry").forEach((b,i) => b.querySelector(".en").textContent = i+1);
+const gv = (b,k) => b.querySelector(`[data-k="${k}"]`).value.trim();
+function appendBlock(box, html){
+  box.insertAdjacentHTML("beforeend", html); renumber(box);
+  const nb = box.lastElementChild; if(nb.scrollIntoView) nb.scrollIntoView({block:"nearest",behavior:"smooth"});
+  nb.querySelector("input").focus();
+}
+function wireBatch(box, addBlock){
+  box.addEventListener("keydown", e => {
+    if(e.key!=="Tab" || e.shiftKey) return;
+    const last = box.lastElementChild; if(!last || !last.contains(e.target)) return;
+    const fields = [...last.querySelectorAll("input,select,textarea")];
+    if(e.target!==fields[fields.length-1] || !fields[0].value.trim()) return;  // only auto-start when this entry has a title/name
+    e.preventDefault(); addBlock();
+  });
+  box.addEventListener("click", e => {
+    const r = e.target.closest("[data-rm]"); if(!r) return;
+    r.closest(".entry").remove(); renumber(box);
+  });
+}
+const ni = (k,label,w) => `<div style="flex:1 1 ${w}px"><label>${label}</label><input data-k="${k}" type="number" min="0" step="any"></div>`;
+function lodgeBlock(n, region, removable){
+  const regOpts = REGIONS.map(([r,l]) => `<option value="${r}" ${r===region?"selected":""}>${l}</option>`).join("");
+  return entryShell(n, `<label>Listing name</label><input data-k="name" placeholder="e.g. Villa Carmen">
+    <div class="row"><div style="flex:1 1 130px"><label>Area</label><select data-k="region">${regOpts}</select></div>
+      <div style="flex:1 1 130px"><label>Status</label><select data-k="status"><option>Idea</option><option>Considering</option><option>Booked</option></select></div>
+      ${ni("minDays","Min nights",90)}${ni("price","Price ($)",100)}
+      <div style="flex:1 1 170px"><label>Price is</label><select data-k="priceType"><option value="night">per night</option><option value="stay">total for min stay</option></select></div></div>
+    <div class="row">${ni("bedrooms","Bedrooms",80)}${ni("beds","Beds",80)}${ni("baths","Baths",80)}
+      <div style="flex:1 1 90px"><label>Beach</label><select data-k="beach"><option value=""></option><option>Y</option><option>N</option></select></div>
+      <div style="flex:1 1 110px"><label>Parking</label><input data-k="parking" placeholder="1 Space"></div>${ni("rating","Rating",80)}</div>
+    <label>Link</label><input data-k="link" placeholder="https://…">`, removable);
+}
+/*BATCH_END*/
+
+function catBlock(cat, item, n, removable){
+  const C = CATS[cat], ctype = item?.costType || CAT_COST_DEFAULT[cat] || "each";
+  return entryShell(n, `<label>Title</label><input data-k="title" placeholder="${esc(C.titlePh)}" value="${esc(item?.title||"")}">
+    <div class="row"><div style="flex:1 1 180px"><label>${C.dateLabel}</label><input data-k="date" value="${esc(item?.date||"")}" placeholder="Feb 12–19"></div>
+      <div style="flex:1 1 120px"><label>Amount ($)</label><input data-k="amount" type="number" min="0" step="any" value="${esc(item?.amount??"")}" placeholder="0"></div>
+      <div style="flex:1 1 200px"><label>Who pays?</label><select data-k="costType">${COST_TYPES.map(([v,t])=>`<option value="${v}" ${ctype===v?"selected":""}>${t}</option>`).join("")}</select></div>
+      <div style="flex:1 1 140px"><label>Status</label><select data-k="status">${C.statuses.map(s=>`<option ${((item?.status)||C.statuses[0])===s?"selected":""}>${s}</option>`).join("")}</select></div></div>
+    <label>Cost note (optional)</label><input data-k="cost" value="${esc(item?.cost||"")}" placeholder="e.g. estimate before tax">
+    <label>Link</label><input data-k="link" value="${esc(item?.link||"")}" placeholder="https://…">
+    <label>Who's in?</label><input data-k="who" value="${esc(item?.who||"")}" placeholder="everyone, or names">
+    <label>Notes</label><textarea data-k="notes">${esc(item?.notes||"")}</textarea>`, removable);
+}
+
 function openForm(cat, item=null){
   const C = CATS[cat]; editing = {cat, id:item?.id};
   const f = document.getElementById("form");
   f.innerHTML = `<div class="card c-${cat}"><b>${item?"Edit":"New"} ${C.label}</b>
-    <label>Title</label><input id="f_title" placeholder="${esc(C.titlePh)}" value="${esc(item?.title||"")}">
-    <div class="row"><div style="flex:1 1 180px"><label>${C.dateLabel}</label><input id="f_date" value="${esc(item?.date||"")}" placeholder="Feb 12–19"></div>
-      <div style="flex:1 1 140px"><label>Cost</label><input id="f_cost" value="${esc(item?.cost||"")}" placeholder="$120/night"></div>
-      <div style="flex:1 1 140px"><label>Status</label><select id="f_status">${C.statuses.map(s=>`<option ${((item?.status)||C.statuses[0])===s?"selected":""}>${s}</option>`).join("")}</select></div></div>
-    <label>Link</label><input id="f_link" value="${esc(item?.link||"")}" placeholder="https://…">
-    <label>Who's in?</label><input id="f_who" value="${esc(item?.who||"")}" placeholder="everyone, or names">
-    <label>Notes</label><textarea id="f_notes">${esc(item?.notes||"")}</textarea>
-    <div class="actions"><button class="btn" id="f_save">💾 Save</button><button class="btn ghost" id="f_cancel">Cancel</button></div></div>`;
-  f.scrollIntoView({behavior:"smooth"});
-  document.getElementById("f_cancel").onclick = () => { editing=null; f.innerHTML=""; };
+    <div class="meta">Only items marked Booked count toward the 💰 Budget.${item?"":" Press Tab past the last field (Notes) to start another entry; Save all adds them together."}</div>
+    <div id="entries">${catBlock(cat,item,1,false)}</div>
+    <div class="actions"><button class="btn" id="f_save">💾 ${item?"Save":"Save all"}</button>${item?"":`<button class="btn ghost" id="f_more" type="button">+ Add another entry</button>`}<button class="btn ghost" id="f_cancel">Cancel</button></div></div>`;
+  const box = document.getElementById("entries");
+  f.scrollIntoView({behavior:"smooth"}); box.querySelector("input").focus();
+  const close = () => { editing = null; renderBody(); };
+  if(!item){ const more = () => appendBlock(box, catBlock(cat,null,box.children.length+1,true)); wireBatch(box, more); document.getElementById("f_more").onclick = more; }
+  document.getElementById("f_cancel").onclick = close;
   document.getElementById("f_save").onclick = async () => {
-    const v = id => document.getElementById(id).value.trim();
-    if(!v("f_title")) return alert("Add a title first.");
-    const payload = { title:v("f_title"), date:v("f_date"), cost:v("f_cost"), status:v("f_status"), link:v("f_link"), who:v("f_who"), notes:v("f_notes"), updatedBy:me, updatedAt:serverTimestamp() };
+    const rows = [...box.querySelectorAll(".entry")].filter(b => gv(b,"title")).map(b => ({ title:gv(b,"title"), date:gv(b,"date"), cost:gv(b,"cost"), amount:bnv(gv(b,"amount")), costType:gv(b,"costType"), status:gv(b,"status"), link:gv(b,"link"), who:gv(b,"who"), notes:b.querySelector('[data-k="notes"]').value.trim() }));
+    if(!rows.length) return alert("Add a title first.");
     try{
-      if(item) await updateDoc(doc(...tripRef(cat,item.id)), payload);
-      else await addDoc(collection(...tripRef(cat)), { ...payload, addedBy:me, votes:[], createdAt:serverTimestamp() });
-      editing=null; f.innerHTML="";
+      if(item) await updateDoc(doc(...tripRef(cat,item.id)), { ...rows[0], updatedBy:me, updatedAt:serverTimestamp() });
+      else { const wb = writeBatch(db); rows.forEach((r,i) => wb.set(doc(collection(...tripRef(cat))), { ...r, updatedBy:me, updatedAt:serverTimestamp(), addedBy:me, votes:[], createdAt:new Date(Date.now()+i) })); await wb.commit(); }
+      close();
     }catch(e){ showErr(e); }
   };
+}
+
+function openLodgingForm(region="sj"){
+  const f = document.getElementById("lform"); if(!f) return; lForm = true;
+  f.innerHTML = `<div class="card c-lodging"><b>Add listings</b><div class="meta">Fill one in, then press Tab past the last field (Link) to start the next. Save all adds every listing that has a name.</div>
+    <div id="lentries">${lodgeBlock(1,region,false)}</div>
+    <div class="actions"><button class="btn" id="l_save">💾 Save all</button><button class="btn ghost" id="l_more" type="button">+ Add another listing</button><button class="btn ghost" id="l_cancel">Cancel</button></div></div>`;
+  const box = document.getElementById("lentries");
+  const more = () => appendBlock(box, lodgeBlock(box.children.length+1, box.lastElementChild.querySelector('[data-k="region"]').value, true));
+  wireBatch(box, more);
+  f.scrollIntoView({behavior:"smooth"}); box.querySelector("input").focus();
+  const close = () => { lForm = false; renderBody(); };
+  document.getElementById("l_more").onclick = more;
+  document.getElementById("l_cancel").onclick = close;
+  document.getElementById("l_save").onclick = async () => {
+    const rows = [...box.querySelectorAll(".entry")].filter(b => gv(b,"name")).map(b => ({ region:gv(b,"region"), name:gv(b,"name"), minDays:bnv(gv(b,"minDays"))||1, price:bnv(gv(b,"price"))||0, priceType:gv(b,"priceType"), status:gv(b,"status"), votes:[], bedrooms:bnv(gv(b,"bedrooms")), beds:bnv(gv(b,"beds")), baths:bnv(gv(b,"baths")), beach:gv(b,"beach"), parking:gv(b,"parking"), rating:bnv(gv(b,"rating")), link:gv(b,"link") }));
+    if(!rows.length) return alert("Give at least one listing a name first.");
+    try{
+      const wb = writeBatch(db);
+      rows.forEach((r,i) => wb.set(doc(collection(...tripRef("budget_airbnb"))), { ...r, order:Date.now()+i, createdAt:serverTimestamp(), addedBy:me }));
+      await wb.commit(); close();
+    }catch(e){ showErr(e); }
+  };
+}
+
+
+/* ====================== BUDGET (mirrors Puerto_Rico_2027.xlsx; only Booked items count) ====================== */
+const AIRBNB_SEED = [{"id":"sj-1","region":"sj","name":"4. Urban home jungle retreat","minDays":1,"price":367,"priceType":"night","bedrooms":4,"beds":4,"baths":2,"beach":"","parking":"N","rating":4.27,"link":"https://www.airbnb.com/rooms/1533354354147586940/price-detail-modal?adults=8&check_in=2027-02-12&check_out=2027-02-14&search_mode=regular_search&source_impression_id=p3_0255396a-4de2-483c-9c3b-556fce3aa17b_e65dfcd7-6ea8-472e-b34e-dc2a32179a64_0_1533354354147586940_3&previous_page_section_name=1000&federated_search_id=0255396a-4de2-483c-9c3b-556fce3aa17b","order":1,"status":"Considering","votes":[]},{"id":"sj-2","region":"sj","name":"Entire rental unit in San Juan","minDays":1,"price":343,"priceType":"night","bedrooms":3,"beds":6,"baths":2,"beach":"","parking":"N","rating":4.53,"link":"https://www.airbnb.com/rooms/1313919275690689557?adults=8&check_in=2027-02-12&check_out=2027-02-14&search_mode=regular_search&source_impression_id=p3_0255396a-4de2-483c-9c3b-556fce3aa17b_e65dfcd7-6ea8-472e-b34e-dc2a32179a64_0_1313919275690689557_0&previous_page_section_name=1000&federated_search_id=0255396a-4de2-483c-9c3b-556fce3aa17b","order":2,"status":"Idea","votes":[]},{"id":"sj-3","region":"sj","name":"Entire home in San Juan","minDays":2,"price":830,"priceType":"stay","bedrooms":4,"beds":5,"baths":2.5,"beach":"","parking":"1 Space","rating":5.0,"link":"https://www.airbnb.com/rooms/1725597850147618819?adults=8&check_in=2027-02-12&check_out=2027-02-14&search_mode=regular_search&source_impression_id=p3_3011aa3a-4c4a-41ae-91bc-1961549c60f5_6ba5bb0c-ee25-4955-97c4-2a921739a45f_0_1725597850147618819_2&previous_page_section_name=1000&federated_search_id=3011aa3a-4c4a-41ae-91bc-1961549c60f5","order":3,"status":"Idea","votes":[]},{"id":"sj-4","region":"sj","name":"French Country chalet with city views","minDays":2,"price":815,"priceType":"stay","bedrooms":4,"beds":6,"baths":3.5,"beach":"","parking":"2 Spaces","rating":4.84,"link":"https://www.airbnb.com/rooms/1232895129956140382?adults=8&check_in=2027-02-12&check_out=2027-02-14&search_mode=regular_search&source_impression_id=p3_34c5e701-48a2-4567-a3cf-ca69f1b204a9_ee57b40f-7ad1-43b6-87e3-3627e9062f22_0_1232895129956140382_3&previous_page_section_name=1000&federated_search_id=34c5e701-48a2-4567-a3cf-ca69f1b204a9","order":4,"status":"Idea","votes":[]},{"id":"sj-5","region":"sj","name":"Pool, jacuzzi, and private backyard","minDays":2,"price":805,"priceType":"stay","bedrooms":5,"beds":4,"baths":2,"beach":"","parking":"1 Space","rating":4.88,"link":"https://www.airbnb.com/rooms/1237973088660014320?adults=8&check_in=2027-02-12&check_out=2027-02-14&search_mode=regular_search&amenities%5B%5D=9&source_impression_id=p3_24cf3b24-de13-4a1a-8e2f-0363422ebeae_d3d05ba3-be8a-4835-8196-1f4bbb3ebf27_0_1237973088660014320_3&previous_page_section_name=1000&federated_search_id=24cf3b24-de13-4a1a-8e2f-0363422ebeae","order":5,"status":"Idea","votes":[]},{"id":"e-1","region":"e","name":"Modern Coco Beach Retreat","minDays":2,"price":1197,"priceType":"stay","bedrooms":3,"beds":9,"baths":2.5,"beach":"Y","parking":"","rating":4.86,"link":"https://www.airbnb.com/rooms/552279023454779214?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906820531&check_in=2027-02-16&check_out=2027-02-19&source_impression_id=p3_1790891728_P3jL_9Oh2a1lMeyF&previous_page_section_name=1000","order":6,"status":"Considering","votes":[]},{"id":"e-2","region":"e","name":"Mandala vacation house spectacular","minDays":3,"price":843,"priceType":"stay","bedrooms":3,"beds":9,"baths":1,"beach":"N","parking":"","rating":4.9,"link":"https://www.airbnb.com/rooms/1171049417397986121?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906819579&check_in=2027-02-16&check_out=2027-02-19&source_impression_id=p3_1790892061_P3hAVZyJr3ogHfx6&previous_page_section_name=1000","order":7,"status":"Idea","votes":[]},{"id":"e-3","region":"e","name":"Luquillo Family Home","minDays":3,"price":804,"priceType":"stay","bedrooms":4,"beds":7,"baths":1,"beach":"N","parking":"","rating":4.95,"link":"https://www.airbnb.com/rooms/1373450406474594415?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906817806&check_in=2027-02-16&check_out=2027-02-19&source_impression_id=p3_1790892168_P3j5u4eq7EWCtg00&previous_page_section_name=1000","order":8,"status":"Idea","votes":[]},{"id":"e-4","region":"e","name":"Entire rental unit - La Casita Blanca","minDays":1,"price":387,"priceType":"night","bedrooms":2,"beds":6,"baths":1,"beach":"Y","parking":"","rating":4.93,"link":"https://www.airbnb.com/rooms/561605587335214973?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906816440&check_in=2027-02-16&check_out=2027-02-19&source_impression_id=p3_1790892298_P3niKM135FYMu1-w&previous_page_section_name=1000","order":9,"status":"Idea","votes":[]},{"id":"e-5","region":"e","name":"5bd Ocean View & Rooftop Deck","minDays":3,"price":1809,"priceType":"stay","bedrooms":5,"beds":6,"baths":4,"beach":"Y","parking":"","rating":4.82,"link":"https://www.airbnb.com/rooms/16740613?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906816190&check_in=2027-02-16&check_out=2027-02-19&source_impression_id=p3_1790892425_P3MpbyLTO_YaRhXX&previous_page_section_name=1000","order":10,"status":"Idea","votes":[]},{"id":"e-6","region":"e","name":"Fajardo, Las Croabas","minDays":2,"price":905,"priceType":"stay","bedrooms":3,"beds":6,"baths":3,"beach":"Y","parking":"","rating":4.88,"link":"https://www.airbnb.com/rooms/35334547?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906815938&check_in=2027-02-16&check_out=2027-02-19&source_impression_id=p3_1790892510_P3L8GPB53JiThTLf&previous_page_section_name=1000","order":11,"status":"Idea","votes":[]},{"id":"e-7","region":"e","name":"The Casona Beach House","minDays":2,"price":570,"priceType":"stay","bedrooms":3,"beds":6,"baths":2,"beach":"Y","parking":"","rating":4.82,"link":"https://www.airbnb.com/rooms/846607632081694137?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906815657&check_in=2027-02-16&check_out=2027-02-19&source_impression_id=p3_1790892618_P30SV-HPszc6SbEH&previous_page_section_name=1000","order":12,"status":"Idea","votes":[]},{"id":"w-1","region":"w","name":"Sea Breeze Rooftop","minDays":3,"price":542,"priceType":"stay","bedrooms":2,"beds":5,"baths":1,"beach":"N","parking":"","rating":4.88,"link":"https://www.airbnb.com/rooms/799431566577767535?adults=8&wishlist_item_id=11006906838627&check_in=2027-02-12&source_impression_id=p3_1790887798_P3UYfHFqtbCZ-rfz&previous_page_section_name=1000&guests=1&check_out=2027-02-20","order":13,"status":"Idea","votes":[]},{"id":"w-2","region":"w","name":"Amazing Pool House and OceanView","minDays":3,"price":955,"priceType":"stay","bedrooms":2,"beds":6,"baths":1.5,"beach":"Y","parking":"","rating":4.75,"link":"https://www.airbnb.com/rooms/923248130213490572?adults=8&wishlist_item_id=11006906837204&check_in=2027-02-17&source_impression_id=p3_1790887798_P3IDwS0cNG9gwFDQ&previous_page_section_name=1000&guests=1&check_out=2027-02-20","order":14,"status":"Considering","votes":[]},{"id":"w-3","region":"w","name":"Ocean View Escape","minDays":3,"price":919,"priceType":"stay","bedrooms":4,"beds":5,"baths":2.5,"beach":"N","parking":"","rating":5.0,"link":"https://www.airbnb.com/rooms/1613758842465993644?adults=8&wishlist_item_id=11006906836351&check_in=2027-02-12&source_impression_id=p3_1790887798_P3vmE-U12tPjDre7&previous_page_section_name=1000&guests=1&check_out=2027-02-20","order":15,"status":"Idea","votes":[]},{"id":"w-4","region":"w","name":"Ocean View House in Quebradillas","minDays":2,"price":561,"priceType":"stay","bedrooms":3,"beds":5,"baths":3,"beach":"N","parking":"","rating":5.0,"link":"https://www.airbnb.com/rooms/1451679551037596648?adults=8&wishlist_item_id=11006906835828&check_in=2027-02-12&source_impression_id=p3_1790887798_P3wq-hkga82MduXS&previous_page_section_name=1000&guests=1&check_out=2027-02-19","order":16,"status":"Idea","votes":[]},{"id":"w-5","region":"w","name":"Ocean Front House. Magui Beach House","minDays":2,"price":437,"priceType":"stay","bedrooms":3,"beds":5,"baths":1,"beach":"Y","parking":"","rating":4.93,"link":"https://www.airbnb.com/rooms/679873779714108458?adults=8&wishlist_item_id=11006906831538&check_in=2027-02-12&check_out=2027-02-19&source_impression_id=p3_1790887798_P3TXFm9yI1spS2az&previous_page_section_name=1000&guests=1&scroll_to_review=1752959802618112711&review_page_entrypoint=show_more","order":17,"status":"Idea","votes":[]},{"id":"w-6","region":"w","name":"Villa Mar Azul","minDays":2,"price":396,"priceType":"stay","bedrooms":3,"beds":5,"baths":1,"beach":"Y","parking":"","rating":4.89,"link":"https://www.airbnb.com/rooms/1322455886461966870?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906831287&check_in=2027-02-12&check_out=2027-02-19&source_impression_id=p3_1790887798_P34GkOnIAbnaPU9K&previous_page_section_name=1000","order":18,"status":"Idea","votes":[]},{"id":"w-7","region":"w","name":"Blue Summer House","minDays":2,"price":999,"priceType":"stay","bedrooms":2,"beds":6,"baths":2,"beach":"Y","parking":"","rating":4.89,"link":"https://www.airbnb.com/rooms/800199843969342082?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906830964&check_in=2027-02-12&check_out=2027-02-19&source_impression_id=p3_1790887798_P33nMo0U_UIb0YqF&previous_page_section_name=1000","order":19,"status":"Idea","votes":[]},{"id":"w-8","region":"w","name":"Villa Carmen","minDays":2,"price":850,"priceType":"stay","bedrooms":3,"beds":9,"baths":2.5,"beach":"Y","parking":"","rating":4.91,"link":"https://www.airbnb.com/rooms/1412763170332673292?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906830619&check_in=2027-02-12&check_out=2027-02-19&source_impression_id=p3_1790887798_P3ykUm_bkHIR7qzO&previous_page_section_name=1000","order":20,"status":"Idea","votes":[]},{"id":"w-9","region":"w","name":"Casa Jobos","minDays":1,"price":200,"priceType":"night","bedrooms":3,"beds":5,"baths":1,"beach":"Y","parking":"","rating":4.97,"link":"https://www.airbnb.com/rooms/1189272092967452486?adults=8&children=0&infants=0&pets=0&wishlist_item_id=11006906826737&check_in=2027-02-12&check_out=2027-02-19&source_impression_id=p3_1790887798_P3KELRzVH2Q6GTK-&previous_page_section_name=1000","order":21,"status":"Idea","votes":[]}];
+const ACT_SEED = [["Night Kayaking",70],["Beach Ride",100],["Zip Lining",100],["National Park",8]];
+const VAN_SEED = [["Airport Access Fee",20,null,""],["CDW Deductible",21.95,null,""],["Energy Recovery Fee",1.85,null,""],["Facility Recovery Fee",2.6,null,""],["License Recovery Fee",2.5,null,""],["Insurance",12.95,null,"Optional"],["Additional Driver",12.95,null,"Optional"],["Car Seat",10.95,0,"Optional"],["GPS",12.95,0,"Optional"]];
+const BUDGET_DEFAULT = { v:2, people:8, nightsSj:2, nightsEast:3, nightsWest:3, labelSj:"Fri-Sat", labelEast:"Sun-Tues", labelWest:"Wed-Fri",
+  selSj:"sj-1", selEast:"e-1", selWest:"w-2", taxPct:10.36990898, vanWeek:1399.65, vanDay:199.95, vanStatus:"Idea" };
+const REGIONS = [["sj","San Juan","Sj"],["e","Eastern","East"],["w","Western","West"]];
+const COST_TYPES = [["split","Split among the group"],["each","Each person pays"],["one","One person only"]];
+const CAT_COST_DEFAULT = { transport:"split", flights:"each", activities:"each", places:"each", food:"each" };
+const EST_CATS = ["flights","transport","activities","places","food"];
+let bset = { ...BUDGET_DEFAULT }, bAir = [], bVan = [];
+let lForm = false;
+let bTab = ls.get("pr_btab") === "van" ? "van" : "estimate", pendingRender = false, seeding = false;
+
+/*CALC_START*/
+const num = n => Number(n) || 0;
+const money = n => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(Number.isFinite(n)?n:0);
+const perNight = l => l ? (l.priceType==="stay" ? num(l.price)/Math.max(1,num(l.minDays)) : num(l.price)) : 0;
+const sum = a => a.reduce((x,y)=>x+y,0);
+function itemCost(cat,i,n){
+  const amt = num(i.amount), type = i.costType || CAT_COST_DEFAULT[cat] || "each";
+  const group = type==="each" ? amt*n : amt;
+  return { type, amt, group, pp: group/n };
+}
+function vanCalc(days){
+  const S = bset, people = Math.max(1,num(S.people));
+  const week = days>=7 ? num(S.vanWeek) : 0;
+  const extra = days>=7 ? days-7 : days;
+  const dayCost = num(S.vanDay)*extra;
+  const lines = bVan.map(l => { const qtyUsed = (l.qty===null||l.qty===undefined||l.qty==="") ? days : num(l.qty); return { ...l, qtyUsed, amt:num(l.rate)*qtyUsed }; });
+  const subtotal = week + dayCost + sum(lines.map(l=>l.amt));
+  const tax = subtotal*num(S.taxPct)/100;
+  const total = subtotal + tax;
+  return { week, extra, dayCost, lines, subtotal, tax, total, pp: total/people };
+}
+function calcEstimate(){
+  const S = bset, n = Math.max(1,num(S.people));
+  const nights = num(S.nightsSj)+num(S.nightsEast)+num(S.nightsWest);
+  const van = vanCalc(nights);
+  const vanCounted = S.vanStatus==="Booked";
+  const lodging = [["sj","San Juan","Sj"],["e","Eastern","East"],["w","Western","West"]].map(([reg,label,k]) => {
+    const nt = num(S["nights"+k]);
+    const booked = bAir.filter(x => x.region===reg && x.status==="Booked").map(x => ({ listing:x, total:perNight(x)*nt }));
+    const preview = bAir.find(x => x.id===S["sel"+k] && x.region===reg);
+    const bookedTotal = sum(booked.map(b=>b.total));
+    return { k, reg, label, nights:nt, booked, bookedTotal, preview, previewTotal:perNight(preview)*nt };
+  });
+  const cats = EST_CATS.map(cat => {
+    const items = (data[cat]||[]).map(i => ({ i, ...itemCost(cat,i,n) }));
+    const booked = items.filter(x => x.i.status==="Booked"), other = items.filter(x => x.i.status!=="Booked");
+    return { cat, booked, other, bookedTotal:sum(booked.map(x=>x.group)), potential:sum(other.map(x=>x.group)) };
+  });
+  const total = sum(lodging.map(l=>l.bookedTotal)) + (vanCounted ? van.total : 0) + sum(cats.map(c=>c.bookedTotal));
+  return { n, nights, van, vanCounted, lodging, cats, total, pp: total/n };
+}
+/*CALC_END*/
+
+function listenBudget(){
+  unsubs.push(onSnapshot(doc(...tripRef("meta","budget")), s => {
+    if(s.exists()){ bset = { ...BUDGET_DEFAULT, ...s.data() }; if(!s.data().v) migrateBudget(s.data()); }
+    else if(!s.metadata.fromCache) seedBudget();
+    refreshBudget();
+  }, showErr));
+  const watch = (col,set) => unsubs.push(onSnapshot(query(collection(...tripRef(col)), orderBy("order","asc")), snap => {
+    set(snap.docs.map(d => ({ id:d.id, ...d.data() }))); refreshBudget();
+  }, showErr));
+  watch("budget_airbnb", v => bAir = v); watch("budget_van", v => bVan = v);
+}
+function refreshBudget(){
+  if(tab!=="budget" && tab!=="overview" && tab!=="lodging") return;
+  if(tab==="lodging" && lForm) return;
+  if(isTyping()){ pendingRender = true; return; }
+  renderBody();
+}
+document.addEventListener("focusout", () => setTimeout(() => { if(pendingRender && !isTyping() && !(tab==="lodging" && lForm)){ pendingRender = false; renderBody(); } }, 0));
+
+/* Spreadsheet activities/flights become normal items on the Activities and Flights tabs */
+function seedItemWrites(b, flight){
+  ACT_SEED.forEach(([title,amount],i) => b.set(doc(...tripRef("activities","seed-act-"+(i+1))), { title, date:"", cost:"", amount, costType:"each", status:"Planned", link:"", who:"", notes:"Imported from the spreadsheet", addedBy:"spreadsheet", votes:[], createdAt:serverTimestamp() }));
+  b.set(doc(...tripRef("flights","seed-flt-1")), { title:"Flights (from spreadsheet)", date:"", cost:"", amount:flight.amount, costType:flight.costType, status:"Idea", link:"", who:"", notes:"The spreadsheet counted this as both a group total and a per-person price. Check the amount and the Who pays? setting.", addedBy:"spreadsheet", votes:[], createdAt:serverTimestamp() });
+}
+async function seedBudget(){
+  if(seeding) return; seeding = true;
+  try{
+    const b = writeBatch(db);
+    AIRBNB_SEED.forEach(r => { const { id, ...rest } = r; b.set(doc(...tripRef("budget_airbnb",id)), { ...rest, createdAt:serverTimestamp() }); });
+    VAN_SEED.forEach(([name,rate,qty,note],i) => b.set(doc(...tripRef("budget_van","v"+(i+1))), { name, rate, qty, note, order:i+1 }));
+    seedItemWrites(b, { amount:882, costType:"each" });
+    b.set(doc(...tripRef("meta","budget")), { ...BUDGET_DEFAULT, updatedBy:me, updatedAt:serverTimestamp() });
+    await b.commit();
+  }catch(e){ seeding = false; showErr(e); }
+}
+/* For a trip that already imported the first version of the spreadsheet */
+async function migrateBudget(old){
+  if(seeding) return; seeding = true;
+  try{
+    const b = writeBatch(db);
+    seedItemWrites(b, { amount:num(old.flights)||882, costType: old.flightsMode==="total" ? "split" : "each" });
+    b.set(doc(...tripRef("meta","budget")), { v:2, vanStatus:"Idea", flights:deleteField(), flightsMode:deleteField(), updatedBy:me, updatedAt:serverTimestamp() }, { merge:true });
+    await b.commit();
+  }catch(e){ seeding = false; showErr(e); }
+}
+
+const setNum = (k,w=80) => `<input type="number" min="0" step="any" data-set="${k}" data-type="num" value="${esc(bset[k]??"")}" style="width:${w}px">`;
+const setTxt = (k,w=110) => `<input data-set="${k}" value="${esc(bset[k]??"")}" maxlength="30" style="width:${w}px">`;
+const statusSel = (key,val,opts) => `<select data-set="${key}">${opts.map(o=>`<option ${val===o?"selected":""}>${o}</option>`).join("")}</select>`;
+const typeLabel = t => (COST_TYPES.find(x=>x[0]===t)||[])[1] || "";
+
+function costLine(cat,i){
+  const n = Math.max(1,num(bset.people)), amt = num(i.amount);
+  const note = i.cost ? `<span>📝 ${esc(i.cost)}</span>` : "";
+  if(!amt) return note;
+  const c = itemCost(cat,i,n);
+  const txt = c.type==="split" ? `${money(amt)} split ${n} ways (${money(amt/n)} each)`
+            : c.type==="one" ? `${money(amt)} · one person${i.who?` (${esc(i.who)})`:""}`
+            : `${money(amt)} each × ${n} = ${money(amt*n)}`;
+  return `<span>💵 ${txt}</span><span class="${i.status==="Booked"?"ok":"muted-note"}">${i.status==="Booked"?"✔ counts toward budget":"not counted until Booked"}</span>${note}`;
+}
+
+function budgetSummaryCard(){
+  const E = calcEstimate();
+  return `<div class="card c-transport" data-go="budget" style="cursor:pointer"><b>💰 Booked so far</b>
+    <div style="font-size:1.4rem;font-weight:700">${money(E.total)} <span class="meta" style="display:inline">group total</span></div>
+    <div class="meta"><span>about ${money(E.pp)} per person (${E.n} people)</span><span>only Booked items count · tap to open the budget</span></div></div>`;
+}
+
+function renderBudget(body){
+  const labels = { estimate:"🧮 Estimate", van:"🚐 Van rental" };
+  body.innerHTML = `<div class="subtabs">${Object.entries(labels).map(([k,l]) => `<button data-bt="${k}" class="${k===bTab?"on":""}">${l}</button>`).join("")}</div><div id="bbody"></div>`;
+  body.querySelectorAll("[data-bt]").forEach(b => b.onclick = () => { bTab = b.dataset.bt; ls.set("pr_btab",bTab); renderBudget(body); });
+  const bb = document.getElementById("bbody");
+  bb.innerHTML = bTab==="van" ? vanHTML() : estimateHTML();
+  bb.onchange = onBudgetChange; bb.onclick = onBudgetClick;
+}
+
+function estimateHTML(){
+  const E = calcEstimate(), S = bset, n = E.n;
+  const basics = `<div class="card plain"><b>⚙️ Trip basics</b>
+    <div class="row" style="align-items:center;margin:6px 0"><span style="min-width:130px">People</span>${setNum("people",70)}</div>
+    ${REGIONS.map(([reg,label,k]) => `<div class="row" style="align-items:center;margin:4px 0"><span style="min-width:130px">${label} nights</span>${setNum("nights"+k,70)}${setTxt("label"+k,120)}</div>`).join("")}
+    <div class="meta">Total nights: <b>${E.nights}</b> (this sets the van rental length)</div></div>`;
+  const R = (cells,cls="") => `<tr class="${cls}">${cells.map(c=>`<td>${c}</td>`).join("")}</tr>`;
+  const lodgingRows = E.lodging.map(L => {
+    const sub = `${L.nights} nights${S["label"+L.k]?` · ${esc(S["label"+L.k])}`:""}`;
+    if(L.booked.length) return L.booked.map(b => R([`🏡 ${L.label}: ${esc(b.listing.name)}<div class="meta">${sub}</div>`,"Split among the group",money(b.total),money(b.total/n)])).join("");
+    const opts = bAir.filter(x => x.region===L.reg).map(x => `<option value="${esc(x.id)}" ${x.id===S["sel"+L.k]?"selected":""}>${esc(x.name)} — ${money(perNight(x))}/night</option>`).join("");
+    return R([`🏡 ${L.label}: nothing booked yet<div class="meta">${sub}</div>`,`preview: <select data-set="sel${L.k}" style="max-width:240px"><option value="">— choose —</option>${opts}</select>`,`${money(L.previewTotal)} <span class="warn">not counted</span>`,money(L.previewTotal/n)],"muted");
+  }).join("");
+  const vanRow = R([`🚐 Passenger van<div class="meta">${E.nights} days</div>`,`${statusSel("vanStatus",S.vanStatus,["Idea","Considering","Booked"])} <button class="btn ghost small" data-do="goto" data-to="van">details</button>`,`${money(E.van.total)}${E.vanCounted?"":` <span class="warn">not counted</span>`}`,money(E.van.pp)], E.vanCounted?"":"muted");
+  const catRows = E.cats.map(c => {
+    const C = CATS[c.cat];
+    const rows = c.booked.map(x => R([`${C.icon} ${esc(x.i.title)}${x.i.who?`<div class="meta">${esc(x.i.who)}</div>`:""}`, typeLabel(x.type)+(x.type==="each"?` (${money(x.amt)} × ${n})`:""), money(x.group), money(x.pp)])).join("");
+    const rest = c.other.length ? R([`${C.icon} ${C.label}: ${c.other.length} not booked yet`,`<button class="btn ghost small" data-do="gotoTab" data-to="${c.cat}">open tab</button>`,`${money(c.potential)} <span class="warn">not counted</span>`,money(c.potential/n)],"muted") : "";
+    return rows + rest;
+  }).join("");
+  return `${basics}<div class="card plain"><b>🧮 Cost estimate</b> <span class="meta">only Booked items count</span>
+    <div class="tbl"><table><thead><tr><th>Item</th><th>How it's paid</th><th>Group cost</th><th>Avg per person</th></tr></thead><tbody>
+    ${lodgingRows}${vanRow}${catRows}
+    <tr class="tot"><td>TOTAL BOOKED</td><td></td><td>${money(E.total)}</td><td>${money(E.pp)}</td></tr></tbody></table></div>
+    <div class="meta">Mark a lodging listing or an item as <b>Booked</b> on its tab to add it here. Faded rows show what's still unbooked and are not in the total. Per person = group total ÷ ${n}; "One person only" items are in the group total but aren't everyone's share.</div></div>`;
+}
+
+function vanHTML(){
+  const E = calcEstimate(), V = E.van, days = E.nights;
+  const lineRows = V.lines.map(l => `<tr>
+    <td><input data-col="budget_van" data-id="${esc(l.id)}" data-field="name" value="${esc(l.name)}" maxlength="60"></td>
+    <td><input type="number" min="0" step="any" data-type="num" data-col="budget_van" data-id="${esc(l.id)}" data-field="rate" value="${esc(l.rate??"")}" style="width:80px"></td>
+    <td><input type="number" min="0" step="any" data-type="num" data-col="budget_van" data-id="${esc(l.id)}" data-field="qty" value="${esc(l.qty??"")}" placeholder="${days}" style="width:70px"></td>
+    <td><input data-col="budget_van" data-id="${esc(l.id)}" data-field="note" value="${esc(l.note||"")}" maxlength="40" style="width:100px"></td>
+    <td>${money(l.amt)}</td><td><button class="btn ghost small" data-do="delete" data-col="budget_van" data-id="${esc(l.id)}">🗑️</button></td></tr>`).join("");
+  return `<div class="card plain"><b>🚐 Passenger van rental</b> <span class="meta">${days} days (from nights on the Estimate tab)</span>
+    <div class="row" style="align-items:center;margin:8px 0"><span>Status</span>${statusSel("vanStatus",bset.vanStatus,["Idea","Considering","Booked"])}<span class="meta">${E.vanCounted?"✔ counts toward the budget":"not counted until Booked"}</span></div>
+    <div class="tbl"><table><thead><tr><th>Line</th><th>Rate</th><th>Qty (blank = every day)</th><th>Note</th><th>Amount</th><th></th></tr></thead><tbody>
+    <tr><td>1 week</td><td>${setNum("vanWeek",90)}</td><td>${days>=7?1:0}</td><td></td><td>${money(V.week)}</td><td></td></tr>
+    <tr><td>Per day</td><td>${setNum("vanDay",90)}</td><td>${V.extra}</td><td class="meta">${days>=7?"days beyond 7":"all days"}</td><td>${money(V.dayCost)}</td><td></td></tr>
+    ${lineRows}
+    <tr><td>Subtotal</td><td></td><td></td><td></td><td>${money(V.subtotal)}</td><td></td></tr>
+    <tr><td>Taxes</td><td>${setNum("taxPct",90)} %</td><td></td><td></td><td>${money(V.tax)}</td><td></td></tr>
+    <tr class="tot"><td>Total</td><td></td><td></td><td></td><td>${money(V.total)}</td><td></td></tr>
+    <tr><td>Per person</td><td></td><td></td><td></td><td>${money(V.pp)}</td><td></td></tr></tbody></table></div>
+    <div class="actions"><button class="btn small" data-do="addVan">+ Add line</button></div></div>`;
+}
+
+/* ---------- Lodging tab (the Airbnb comparison, now the single place for lodging) ---------- */
+function renderLodging(body){
+  lForm = false;
+  body.innerHTML = `<div class="card plain"><b>🏡 Lodging options</b>
+    <div class="meta">Edit anything, vote 👍, and set a listing to <b>Booked</b> to add it to the 💰 Budget. Costs are always split among the group.</div>
+    <div class="actions"><button class="btn" data-do="addAir" data-reg="sj">+ Add listings</button></div></div><div id="lform"></div>${lodgingHTML()}`;
+  body.onchange = onBudgetChange; body.onclick = onBudgetClick;
+}
+function lodgingHTML(){
+  const n = Math.max(1,num(bset.people));
+  return REGIONS.map(([reg,label,k]) => {
+    const nights = num(bset["nights"+k]);
+    const rows = bAir.filter(x => x.region===reg).map(x => {
+      const booked = x.status==="Booked", votes = x.votes||[], voted = votes.includes(me);
+      const f = (field,type,w,extra="") => `<input ${type==="num"?`type="number" min="0" step="any" data-type="num"`:""} data-col="budget_airbnb" data-id="${esc(x.id)}" data-field="${field}" value="${esc(x[field]??"")}" style="width:${w}px" ${extra}>`;
+      const sl = (field,opts,cur) => `<select data-col="budget_airbnb" data-id="${esc(x.id)}" data-field="${field}">${opts.map(([v,t]) => `<option value="${v}" ${cur===v?"selected":""}>${t}</option>`).join("")}</select>`;
+      const stay = perNight(x)*nights;
+      return `<tr class="${booked?"sel":""}">
+        <td style="white-space:nowrap">${f("name","text",210)} ${/^https?:\/\//i.test(x.link||"") ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">↗</a>` : ""}</td>
+        <td>${sl("status",[["Idea","Idea"],["Considering","Considering"],["Booked","Booked"]],x.status||"Idea")}</td>
+        <td>${f("minDays","num",60)}</td><td>${f("price","num",85)}</td>
+        <td>${sl("priceType",[["night","per night"],["stay","total for min stay"]],x.priceType||"night")}</td>
+        <td><b>${money(perNight(x))}</b></td><td>${money(stay)}</td><td>${money(stay/n)}</td>
+        <td>${f("bedrooms","num",55)}</td><td>${f("beds","num",55)}</td><td>${f("baths","num",55)}</td>
+        <td>${sl("beach",[["",""],["Y","Y"],["N","N"]],x.beach||"")}</td>
+        <td>${f("parking","text",90)}</td><td>${f("rating","num",65)}</td>
+        <td><button class="btn ghost small" data-do="vote" data-id="${esc(x.id)}">👍 ${votes.length||""}${voted?" ✓":""}</button></td>
+        <td>${f("link","text",120,'placeholder="https://…"')}</td>
+        <td><button class="btn ghost small" data-do="delete" data-col="budget_airbnb" data-id="${esc(x.id)}">🗑️</button></td></tr>`;
+    }).join("");
+    return `<div class="card c-lodging"><b>🏠 ${label}</b> <span class="meta">${nights} nights${bset["label"+k]?` · ${esc(bset["label"+k])}`:""} · "Stay" and "Per person" use these nights and ${n} people</span>
+      <div class="tbl"><table><thead><tr><th>Listing</th><th>Status</th><th>Min nights</th><th>Price</th><th>Price is</th><th>Per night</th><th>Stay</th><th>Per person</th><th>Bedrooms</th><th>Beds</th><th>Baths</th><th>Beach</th><th>Parking</th><th>Rating</th><th>Votes</th><th>Link</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="17" class="empty">No listings yet.</td></tr>`}</tbody></table></div>
+      <div class="actions"><button class="btn small" data-do="addAir" data-reg="${reg}">+ Add ${label} listing</button></div></div>`;
+  }).join("");
+}
+
+async function onBudgetChange(e){
+  const d = e.target.dataset; if(!d.set && !d.col) return;
+  let v = e.target.value; if(d.type==="num") v = v==="" ? null : Number(v);
+  try{
+    if(d.set) await setDoc(doc(...tripRef("meta","budget")), { [d.set]:v, updatedBy:me, updatedAt:serverTimestamp() }, { merge:true });
+    else await updateDoc(doc(...tripRef(d.col,d.id)), { [d.field]:v, updatedBy:me, updatedAt:serverTimestamp() });
+  }catch(err){ showErr(err); }
+}
+async function onBudgetClick(e){
+  const b = e.target.closest("[data-do]"); if(!b) return; const d = b.dataset;
+  try{
+    if(d.do==="goto"){ bTab = d.to; ls.set("pr_btab",bTab); return renderBody(); }
+    if(d.do==="gotoTab") return document.querySelector(`#nav [data-t="${d.to}"]`).click();
+    if(d.do==="vote"){ const x = bAir.find(z => z.id===d.id); if(x) await updateDoc(doc(...tripRef("budget_airbnb",d.id)), { votes:(x.votes||[]).includes(me) ? arrayRemove(me) : arrayUnion(me) }); }
+    if(d.do==="delete" && confirm("Delete this row?")) await deleteDoc(doc(...tripRef(d.col,d.id)));
+    if(d.do==="addVan") await addDoc(collection(...tripRef("budget_van")), { name:"New line", rate:0, qty:null, note:"", order:Date.now() });
+    if(d.do==="addAir") openLodgingForm(d.reg||"sj");
+  }catch(err){ showErr(err); }
 }
 
 boot();
