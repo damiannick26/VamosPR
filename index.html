@@ -95,6 +95,11 @@
   .tbl th{text-align:left;font-size:.72rem;color:var(--muted);padding:4px 6px;white-space:nowrap}
   .tbl td{padding:4px 6px;border-top:1px solid var(--line);vertical-align:middle}
   .tbl input,.tbl select{width:auto;min-width:50px;padding:5px 8px;font-size:.85rem;border-radius:8px}
+  .tbl .fit{display:block;width:max-content;min-width:100%}
+  .tbl td,.tbl th{white-space:nowrap}
+  .tbl .meta{display:inline;margin:0 0 0 8px}
+  .tbl input,.tbl select{max-width:none}
+  main.wide{max-width:min(1700px,100%)}
   .tbl tr.sel td{background:#e6f7f4}
   .tbl tr.tot td{font-weight:700;border-top:3px solid var(--ocean);font-size:1rem}
   .warn{color:#c0301a;font-weight:700;font-size:.75rem}
@@ -107,7 +112,7 @@
 </head>
 <body>
 <div id="app"></div>
-<button class="btn ghost small fontbtn" id="fontbtn" title="Switch font">Aa</button>
+<button class="btn ghost small fontbtn" id="fontbtn" title="Change the font">Aa</button>
 
 <script type="module">
 /* Firebase web config (safe to publish; it identifies the project, it is not a secret) */
@@ -147,7 +152,7 @@ const TAB_LABEL = { chat:"💬 Chat", overview:"🗺️ Overview", budget:"💰 
 let db, tripCode = ls.get("pr_trip"), me = ls.get("pr_name"), tab = ls.get("pr_tab") || "overview";
 let unsubs = [], data = {}, messages = [];
 let overview = { text:"" };
-let header = { title:"Vamos PR", subtitle:"Puerto Rico trip planner · Feb 2027" };
+let header = { title:"Vamos PR", subtitle:"Our island plans, shared · Feb 2027" };
 let editing = null, editingHeader = false;
 
 function boot(){
@@ -160,17 +165,17 @@ function boot(){
 function renderJoin(err=""){
   $app.innerHTML = `<div class="overlay"><div class="card plain">
     <h2>¡Vamos a Puerto Rico! 🇵🇷🌴</h2>
-    <p style="color:var(--muted)">Enter your name and the trip code your group shares. Anyone with the same code sees the same trip.</p>
+    <p style="color:var(--muted)">Enter your name and your group's trip code.</p>
     <label>Your name</label><input id="jn" value="${esc(me||"")}" maxlength="30" placeholder="e.g. Damian">
     <label>Trip code</label><input id="jc" value="${esc(tripCode||"")}" maxlength="40" placeholder="e.g. pr-feb-2027-x7k2q9">
     <p class="err" id="je">${esc(err)}</p>
-    <button class="btn" id="jb">Join trip</button>
+    <button class="btn" id="jb">Join the trip</button>
   </div></div>`;
   document.getElementById("jb").onclick = () => {
     const n = document.getElementById("jn").value.trim();
     const c = document.getElementById("jc").value.trim().toLowerCase().replace(/[^a-z0-9_-]/g,"");
     if(!n) return renderJoin("Please enter your name.");
-    if(c.length < 8) return renderJoin("Trip code needs at least 8 letters/numbers (a-z, 0-9, - or _).");
+    if(c.length < 8) return renderJoin("Your trip code needs at least 8 characters (letters, numbers, - or _).");
     me = n; tripCode = c; ls.set("pr_name", n); ls.set("pr_trip", c);
     boot();
   };
@@ -183,7 +188,7 @@ function startListening(){
   for(const cat of Object.keys(CATS)){
     unsubs.push(onSnapshot(query(collection(...tripRef(cat)), orderBy("createdAt","asc")), snap => {
       data[cat] = snap.docs.map(d => ({id:d.id, ...d.data()}));
-      if(tab===cat && !editing) renderBody();
+      if(tab===cat && !editing && !lForm) renderBody();
       if(tab==="overview" && !isTyping()) renderBody();
       if(tab==="budget") refreshBudget();
     }, showErr));
@@ -207,7 +212,7 @@ const isTyping = () => document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.tes
 function showErr(e){
   console.error(e);
   const el = document.getElementById("body");
-  if(el && !el.querySelector(".conn-err")) el.insertAdjacentHTML("afterbegin", `<div class="card conn-err err">Connection problem: ${esc(e.code||e.message)}. Check your Firestore rules.</div>`);
+  if(el && !el.querySelector(".conn-err")) el.insertAdjacentHTML("afterbegin", `<div class="card conn-err err">Connection problem (${esc(e.code||e.message)}). Check your connection and Firestore rules.</div>`);
 }
 
 function renderShell(){
@@ -251,6 +256,7 @@ function editHeader(){
 function renderBody(){
   const body = document.getElementById("body"); if(!body) return;
   body.onchange = null; body.onclick = null;
+  body.classList.toggle("wide", tab==="budget" || tab==="lodging");
   if(tab==="chat") return renderChat(body);
   if(tab==="overview") return renderOverview(body);
   if(tab==="budget") return renderBudget(body);
@@ -261,7 +267,7 @@ function renderBody(){
 /* ---------- Chat (edit + delete your own messages) ---------- */
 function renderChat(body){
   body.innerHTML = `<div class="chat"><div class="msgs" id="msgs"></div>
-    <form class="chatbar" id="cf"><input id="ci" placeholder="Message the group…" autocomplete="off" maxlength="1000"><button class="btn">Send</button></form></div>`;
+    <form class="chatbar" id="cf"><input id="ci" placeholder="Write to the group…" autocomplete="off" maxlength="1000"><button class="btn">Send</button></form></div>`;
   renderChatMsgs(true);
   document.getElementById("cf").onsubmit = async e => {
     e.preventDefault();
@@ -275,9 +281,9 @@ function renderChatMsgs(scroll){
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   box.innerHTML = messages.length ? messages.map(m => `<div class="msg ${m.name===me?"me":""}"><div class="n">${esc(m.name)}${fmtTime(m.createdAt)}${m.edited?" · edited":""}</div>${esc(m.text)}
       ${m.name===me?`<div class="e"><button data-me="${m.id}">edit</button><button data-md="${m.id}">delete</button></div>`:""}</div>`).join("")
-    : `<div class="empty">No messages yet. Say hola! 👋</div>`;
+    : `<div class="empty">The chat is quiet. Say hola. 👋</div>`;
   box.querySelectorAll("[data-me]").forEach(b => b.onclick = async () => {
-    const m = messages.find(x=>x.id===b.dataset.me); const t = prompt("Edit message", m.text); if(t===null || !t.trim()) return;
+    const m = messages.find(x=>x.id===b.dataset.me); const t = prompt("Edit your message", m.text); if(t===null || !t.trim()) return;
     try { await updateDoc(doc(...tripRef("messages",m.id)), { text:t.trim(), edited:true }); } catch(e){ showErr(e); }
   });
   box.querySelectorAll("[data-md]").forEach(b => b.onclick = async () => {
@@ -292,11 +298,11 @@ const DEFAULT_OVERVIEW = `Who's going & when
 • Catherine, Damian: Feb 9 – Feb 19
 • Sara, Thomas, Amy, Jenna, Dave: Feb 12 – Feb 19
 
-Notes, reminders, group links…`;
+Notes, reminders, links…`;
 function renderOverview(body){
   const tiles = Object.entries(CATS).map(([k,v])=>`<div class="card tile c-${k}" data-go="${k}"><div class="big">${v.icon}</div><b>${(k==="lodging" ? bAir : (data[k]||[])).length}</b><div class="meta" style="justify-content:center">${v.label}</div></div>`).join("");
   body.innerHTML = `${budgetSummaryCard()}<div class="row">${tiles}</div>
-    <div class="card plain"><b>📝 Trip notes</b> <span class="meta">anyone can edit · click Save when done</span>
+    <div class="card plain"><b>📝 Trip notes</b> <span class="meta">anyone can edit</span>
     <textarea id="ovText" style="min-height:240px">${esc(overview.text || DEFAULT_OVERVIEW)}</textarea>
     <div class="actions"><button class="btn" id="ovSave">💾 Save notes</button><span class="saved" id="ovMsg"></span></div></div>`;
   body.querySelectorAll("[data-go]").forEach(c => c.onclick = () => document.querySelector(`#nav [data-t="${c.dataset.go}"]`).click());
@@ -312,7 +318,7 @@ function renderOverview(body){
 function renderCategory(body, cat){
   const C = CATS[cat], items = data[cat] || [];
   body.innerHTML = `<div class="card plain"><button class="btn" id="addb">+ Add to ${C.label}</button></div><div id="form"></div>
-    <div id="list">${items.length ? items.map(i => itemCard(cat,i)).join("") : `<div class="empty">Nothing here yet. Add the first ${C.label.toLowerCase()} idea! 🌺</div>`}</div>`;
+    <div id="list">${items.length ? items.map(i => itemCard(cat,i)).join("") : `<div class="empty">Nothing here yet. 🌺</div>`}</div>`;
   document.getElementById("addb").onclick = () => openForm(cat);
   body.querySelectorAll("[data-act]").forEach(b => b.onclick = () => itemAction(cat, b.dataset.id, b.dataset.act));
 }
@@ -372,11 +378,12 @@ function lodgeBlock(n, region, removable){
     <div class="row"><div style="flex:1 1 130px"><label>Area</label><select data-k="region">${regOpts}</select></div>
       <div style="flex:1 1 130px"><label>Status</label><select data-k="status"><option>Idea</option><option>Considering</option><option>Booked</option></select></div>
       ${ni("minDays","Min nights",90)}${ni("price","Price ($)",100)}
-      <div style="flex:1 1 170px"><label>Price is</label><select data-k="priceType"><option value="night">per night</option><option value="stay">total for min stay</option></select></div></div>
+      <div style="flex:1 1 170px"><label>Price is</label><select data-k="priceType"><option value="night">per night</option><option value="stay">min-stay total</option></select></div></div>
     <div class="row">${ni("bedrooms","Bedrooms",80)}${ni("beds","Beds",80)}${ni("baths","Baths",80)}
       <div style="flex:1 1 90px"><label>Beach</label><select data-k="beach"><option value=""></option><option>Y</option><option>N</option></select></div>
       <div style="flex:1 1 110px"><label>Parking</label><input data-k="parking" placeholder="1 Space"></div>${ni("rating","Rating",80)}</div>
-    <label>Link</label><input data-k="link" placeholder="https://…">`, removable);
+    <label>Link</label><input data-k="link" placeholder="https://…">
+    <label>Notes</label><input data-k="notes" placeholder="optional">`, removable);
 }
 /*BATCH_END*/
 
@@ -397,7 +404,7 @@ function openForm(cat, item=null){
   const C = CATS[cat]; editing = {cat, id:item?.id};
   const f = document.getElementById("form");
   f.innerHTML = `<div class="card c-${cat}"><b>${item?"Edit":"New"} ${C.label}</b>
-    <div class="meta">Only items marked Booked count toward the 💰 Budget.${item?"":" Press Tab past the last field (Notes) to start another entry; Save all adds them together."}</div>
+    <div class="meta">Only Booked items count toward the 💰 Budget.${item?"":" Tab past the last field to add another entry."}</div>
     <div id="entries">${catBlock(cat,item,1,false)}</div>
     <div class="actions"><button class="btn" id="f_save">💾 ${item?"Save":"Save all"}</button>${item?"":`<button class="btn ghost" id="f_more" type="button">+ Add another entry</button>`}<button class="btn ghost" id="f_cancel">Cancel</button></div></div>`;
   const box = document.getElementById("entries");
@@ -407,7 +414,7 @@ function openForm(cat, item=null){
   document.getElementById("f_cancel").onclick = close;
   document.getElementById("f_save").onclick = async () => {
     const rows = [...box.querySelectorAll(".entry")].filter(b => gv(b,"title")).map(b => ({ title:gv(b,"title"), date:gv(b,"date"), cost:gv(b,"cost"), amount:bnv(gv(b,"amount")), costType:gv(b,"costType"), status:gv(b,"status"), link:gv(b,"link"), who:gv(b,"who"), notes:b.querySelector('[data-k="notes"]').value.trim() }));
-    if(!rows.length) return alert("Add a title first.");
+    if(!rows.length) return alert("Please add a title first.");
     try{
       if(item) await updateDoc(doc(...tripRef(cat,item.id)), { ...rows[0], updatedBy:me, updatedAt:serverTimestamp() });
       else { const wb = writeBatch(db); rows.forEach((r,i) => wb.set(doc(collection(...tripRef(cat))), { ...r, updatedBy:me, updatedAt:serverTimestamp(), addedBy:me, votes:[], createdAt:new Date(Date.now()+i) })); await wb.commit(); }
@@ -418,7 +425,7 @@ function openForm(cat, item=null){
 
 function openLodgingForm(region="sj"){
   const f = document.getElementById("lform"); if(!f) return; lForm = true;
-  f.innerHTML = `<div class="card c-lodging"><b>Add listings</b><div class="meta">Fill one in, then press Tab past the last field (Link) to start the next. Save all adds every listing that has a name.</div>
+  f.innerHTML = `<div class="card c-lodging"><b>Add listings</b><div class="meta">Tab past the last field to add another listing.</div>
     <div id="lentries">${lodgeBlock(1,region,false)}</div>
     <div class="actions"><button class="btn" id="l_save">💾 Save all</button><button class="btn ghost" id="l_more" type="button">+ Add another listing</button><button class="btn ghost" id="l_cancel">Cancel</button></div></div>`;
   const box = document.getElementById("lentries");
@@ -429,11 +436,11 @@ function openLodgingForm(region="sj"){
   document.getElementById("l_more").onclick = more;
   document.getElementById("l_cancel").onclick = close;
   document.getElementById("l_save").onclick = async () => {
-    const rows = [...box.querySelectorAll(".entry")].filter(b => gv(b,"name")).map(b => ({ region:gv(b,"region"), name:gv(b,"name"), minDays:bnv(gv(b,"minDays"))||1, price:bnv(gv(b,"price"))||0, priceType:gv(b,"priceType"), status:gv(b,"status"), votes:[], bedrooms:bnv(gv(b,"bedrooms")), beds:bnv(gv(b,"beds")), baths:bnv(gv(b,"baths")), beach:gv(b,"beach"), parking:gv(b,"parking"), rating:bnv(gv(b,"rating")), link:gv(b,"link") }));
-    if(!rows.length) return alert("Give at least one listing a name first.");
+    const rows = [...box.querySelectorAll(".entry")].filter(b => gv(b,"name")).map(b => ({ region:gv(b,"region"), name:gv(b,"name"), minDays:bnv(gv(b,"minDays"))||1, price:bnv(gv(b,"price"))||0, priceType:gv(b,"priceType"), status:gv(b,"status"), votes:[], bedrooms:bnv(gv(b,"bedrooms")), beds:bnv(gv(b,"beds")), baths:bnv(gv(b,"baths")), beach:gv(b,"beach"), parking:gv(b,"parking"), rating:bnv(gv(b,"rating")), link:gv(b,"link"), notes:gv(b,"notes") }));
+    if(!rows.length) return alert("Please name a listing first.");
     try{
       const wb = writeBatch(db);
-      rows.forEach((r,i) => wb.set(doc(collection(...tripRef("budget_airbnb"))), { ...r, order:Date.now()+i, createdAt:serverTimestamp(), addedBy:me }));
+      rows.forEach((r,i) => wb.set(doc(collection(...tripRef("budget_airbnb"))), { ...r, order:Date.now()+i, addedBy:me }));
       await wb.commit(); close();
     }catch(e){ showErr(e); }
   };
@@ -518,8 +525,8 @@ document.addEventListener("focusout", () => setTimeout(() => { if(pendingRender 
 
 /* Spreadsheet activities/flights become normal items on the Activities and Flights tabs */
 function seedItemWrites(b, flight){
-  ACT_SEED.forEach(([title,amount],i) => b.set(doc(...tripRef("activities","seed-act-"+(i+1))), { title, date:"", cost:"", amount, costType:"each", status:"Planned", link:"", who:"", notes:"Imported from the spreadsheet", addedBy:"spreadsheet", votes:[], createdAt:serverTimestamp() }));
-  b.set(doc(...tripRef("flights","seed-flt-1")), { title:"Flights (from spreadsheet)", date:"", cost:"", amount:flight.amount, costType:flight.costType, status:"Idea", link:"", who:"", notes:"The spreadsheet counted this as both a group total and a per-person price. Check the amount and the Who pays? setting.", addedBy:"spreadsheet", votes:[], createdAt:serverTimestamp() });
+  ACT_SEED.forEach(([title,amount],i) => b.set(doc(...tripRef("activities","seed-act-"+(i+1))), { title, date:"", cost:"", amount, costType:"each", status:"Planned", link:"", who:"", notes:"From the spreadsheet", addedBy:"spreadsheet", votes:[], createdAt:serverTimestamp() }));
+  b.set(doc(...tripRef("flights","seed-flt-1")), { title:"Flights (from spreadsheet)", date:"", cost:"", amount:flight.amount, costType:flight.costType, status:"Idea", link:"", who:"", notes:"The spreadsheet was unclear here. Confirm the amount and Who pays?", addedBy:"spreadsheet", votes:[], createdAt:serverTimestamp() });
 }
 async function seedBudget(){
   if(seeding) return; seeding = true;
@@ -556,14 +563,14 @@ function costLine(cat,i){
   const txt = c.type==="split" ? `${money(amt)} split ${n} ways (${money(amt/n)} each)`
             : c.type==="one" ? `${money(amt)} · one person${i.who?` (${esc(i.who)})`:""}`
             : `${money(amt)} each × ${n} = ${money(amt*n)}`;
-  return `<span>💵 ${txt}</span><span class="${i.status==="Booked"?"ok":"muted-note"}">${i.status==="Booked"?"✔ counts toward budget":"not counted until Booked"}</span>${note}`;
+  return `<span>💵 ${txt}</span><span class="${i.status==="Booked"?"ok":"muted-note"}">${i.status==="Booked"?"✔ counted":"not counted until Booked"}</span>${note}`;
 }
 
 function budgetSummaryCard(){
   const E = calcEstimate();
   return `<div class="card c-transport" data-go="budget" style="cursor:pointer"><b>💰 Booked so far</b>
     <div style="font-size:1.4rem;font-weight:700">${money(E.total)} <span class="meta" style="display:inline">group total</span></div>
-    <div class="meta"><span>about ${money(E.pp)} per person (${E.n} people)</span><span>only Booked items count · tap to open the budget</span></div></div>`;
+    <div class="meta"><span>about ${money(E.pp)} per person (${E.n} people)</span><span>Booked items only · tap for details</span></div></div>`;
 }
 
 function renderBudget(body){
@@ -580,13 +587,13 @@ function estimateHTML(){
   const basics = `<div class="card plain"><b>⚙️ Trip basics</b>
     <div class="row" style="align-items:center;margin:6px 0"><span style="min-width:130px">People</span>${setNum("people",70)}</div>
     ${REGIONS.map(([reg,label,k]) => `<div class="row" style="align-items:center;margin:4px 0"><span style="min-width:130px">${label} nights</span>${setNum("nights"+k,70)}${setTxt("label"+k,120)}</div>`).join("")}
-    <div class="meta">Total nights: <b>${E.nights}</b> (this sets the van rental length)</div></div>`;
+    <div class="meta">Total nights: <b>${E.nights}</b></div></div>`;
   const R = (cells,cls="") => `<tr class="${cls}">${cells.map(c=>`<td>${c}</td>`).join("")}</tr>`;
   const lodgingRows = E.lodging.map(L => {
     const sub = `${L.nights} nights${S["label"+L.k]?` · ${esc(S["label"+L.k])}`:""}`;
     if(L.booked.length) return L.booked.map(b => R([`🏡 ${L.label}: ${esc(b.listing.name)}<div class="meta">${sub}</div>`,"Split among the group",money(b.total),money(b.total/n)])).join("");
     const opts = bAir.filter(x => x.region===L.reg).map(x => `<option value="${esc(x.id)}" ${x.id===S["sel"+L.k]?"selected":""}>${esc(x.name)} — ${money(perNight(x))}/night</option>`).join("");
-    return R([`🏡 ${L.label}: nothing booked yet<div class="meta">${sub}</div>`,`preview: <select data-set="sel${L.k}" style="max-width:240px"><option value="">— choose —</option>${opts}</select>`,`${money(L.previewTotal)} <span class="warn">not counted</span>`,money(L.previewTotal/n)],"muted");
+    return R([`🏡 ${L.label}: nothing booked yet<div class="meta">${sub}</div>`,`preview: <select data-set="sel${L.k}"><option value="">— choose —</option>${opts}</select>`,`${money(L.previewTotal)} <span class="warn">not counted</span>`,money(L.previewTotal/n)],"muted");
   }).join("");
   const vanRow = R([`🚐 Passenger van<div class="meta">${E.nights} days</div>`,`${statusSel("vanStatus",S.vanStatus,["Idea","Considering","Booked"])} <button class="btn ghost small" data-do="goto" data-to="van">details</button>`,`${money(E.van.total)}${E.vanCounted?"":` <span class="warn">not counted</span>`}`,money(E.van.pp)], E.vanCounted?"":"muted");
   const catRows = E.cats.map(c => {
@@ -595,11 +602,11 @@ function estimateHTML(){
     const rest = c.other.length ? R([`${C.icon} ${C.label}: ${c.other.length} not booked yet`,`<button class="btn ghost small" data-do="gotoTab" data-to="${c.cat}">open tab</button>`,`${money(c.potential)} <span class="warn">not counted</span>`,money(c.potential/n)],"muted") : "";
     return rows + rest;
   }).join("");
-  return `${basics}<div class="card plain"><b>🧮 Cost estimate</b> <span class="meta">only Booked items count</span>
+  return `${basics}<div class="card plain"><b>🧮 Cost estimate</b> <span class="meta">Booked items only</span>
     <div class="tbl"><table><thead><tr><th>Item</th><th>How it's paid</th><th>Group cost</th><th>Avg per person</th></tr></thead><tbody>
     ${lodgingRows}${vanRow}${catRows}
     <tr class="tot"><td>TOTAL BOOKED</td><td></td><td>${money(E.total)}</td><td>${money(E.pp)}</td></tr></tbody></table></div>
-    <div class="meta">Mark a lodging listing or an item as <b>Booked</b> on its tab to add it here. Faded rows show what's still unbooked and are not in the total. Per person = group total ÷ ${n}; "One person only" items are in the group total but aren't everyone's share.</div></div>`;
+    <div class="meta">Mark an item <b>Booked</b> on its tab to add it here. Faded rows are not counted. Per person = group total ÷ ${n}.</div></div>`;
 }
 
 function vanHTML(){
@@ -610,8 +617,8 @@ function vanHTML(){
     <td><input type="number" min="0" step="any" data-type="num" data-col="budget_van" data-id="${esc(l.id)}" data-field="qty" value="${esc(l.qty??"")}" placeholder="${days}" style="width:70px"></td>
     <td><input data-col="budget_van" data-id="${esc(l.id)}" data-field="note" value="${esc(l.note||"")}" maxlength="40" style="width:100px"></td>
     <td>${money(l.amt)}</td><td><button class="btn ghost small" data-do="delete" data-col="budget_van" data-id="${esc(l.id)}">🗑️</button></td></tr>`).join("");
-  return `<div class="card plain"><b>🚐 Passenger van rental</b> <span class="meta">${days} days (from nights on the Estimate tab)</span>
-    <div class="row" style="align-items:center;margin:8px 0"><span>Status</span>${statusSel("vanStatus",bset.vanStatus,["Idea","Considering","Booked"])}<span class="meta">${E.vanCounted?"✔ counts toward the budget":"not counted until Booked"}</span></div>
+  return `<div class="card plain"><b>🚐 Passenger van rental</b> <span class="meta">${days} days</span>
+    <div class="row" style="align-items:center;margin:8px 0"><span>Status</span>${statusSel("vanStatus",bset.vanStatus,["Idea","Considering","Booked"])}<span class="meta">${E.vanCounted?"✔ counted":"not counted until Booked"}</span></div>
     <div class="tbl"><table><thead><tr><th>Line</th><th>Rate</th><th>Qty (blank = every day)</th><th>Note</th><th>Amount</th><th></th></tr></thead><tbody>
     <tr><td>1 week</td><td>${setNum("vanWeek",90)}</td><td>${days>=7?1:0}</td><td></td><td>${money(V.week)}</td><td></td></tr>
     <tr><td>Per day</td><td>${setNum("vanDay",90)}</td><td>${V.extra}</td><td class="meta">${days>=7?"days beyond 7":"all days"}</td><td>${money(V.dayCost)}</td><td></td></tr>
@@ -624,11 +631,18 @@ function vanHTML(){
 }
 
 /* ---------- Lodging tab (the Airbnb comparison, now the single place for lodging) ---------- */
+const oldLodging = () => (data.lodging||[]).filter(o => !bAir.some(a => a.id==="old-"+o.id));
+function importBanner(){
+  const old = oldLodging(); if(!old.length) return "";
+  return `<div class="card c-transport"><b>📥 ${old.length} earlier lodging ${old.length===1?"entry":"entries"} found</b>
+    <div class="meta">Saved before the Lodging tab was merged. They import under San Juan with no price; set the area and cost afterward.</div>
+    <div class="actions"><button class="btn" data-do="importOld">Import ${old.length} ${old.length===1?"entry":"entries"}</button></div></div>`;
+}
 function renderLodging(body){
   lForm = false;
   body.innerHTML = `<div class="card plain"><b>🏡 Lodging options</b>
-    <div class="meta">Edit anything, vote 👍, and set a listing to <b>Booked</b> to add it to the 💰 Budget. Costs are always split among the group.</div>
-    <div class="actions"><button class="btn" data-do="addAir" data-reg="sj">+ Add listings</button></div></div><div id="lform"></div>${lodgingHTML()}`;
+    <div class="meta">Mark a listing <b>Booked</b> to add it to the 💰 Budget. Lodging is split among the group.</div>
+    <div class="actions"><button class="btn" data-do="addAir" data-reg="sj">+ Add listings</button></div></div>${importBanner()}<div id="lform"></div>${lodgingHTML()}`;
   body.onchange = onBudgetChange; body.onclick = onBudgetClick;
 }
 function lodgingHTML(){
@@ -644,17 +658,18 @@ function lodgingHTML(){
         <td style="white-space:nowrap">${f("name","text",210)} ${/^https?:\/\//i.test(x.link||"") ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">↗</a>` : ""}</td>
         <td>${sl("status",[["Idea","Idea"],["Considering","Considering"],["Booked","Booked"]],x.status||"Idea")}</td>
         <td>${f("minDays","num",60)}</td><td>${f("price","num",85)}</td>
-        <td>${sl("priceType",[["night","per night"],["stay","total for min stay"]],x.priceType||"night")}</td>
+        <td>${sl("priceType",[["night","per night"],["stay","min-stay total"]],x.priceType||"night")}</td>
         <td><b>${money(perNight(x))}</b></td><td>${money(stay)}</td><td>${money(stay/n)}</td>
         <td>${f("bedrooms","num",55)}</td><td>${f("beds","num",55)}</td><td>${f("baths","num",55)}</td>
         <td>${sl("beach",[["",""],["Y","Y"],["N","N"]],x.beach||"")}</td>
         <td>${f("parking","text",90)}</td><td>${f("rating","num",65)}</td>
         <td><button class="btn ghost small" data-do="vote" data-id="${esc(x.id)}">👍 ${votes.length||""}${voted?" ✓":""}</button></td>
+        <td>${f("notes","text",190)}</td>
         <td>${f("link","text",120,'placeholder="https://…"')}</td>
         <td><button class="btn ghost small" data-do="delete" data-col="budget_airbnb" data-id="${esc(x.id)}">🗑️</button></td></tr>`;
     }).join("");
-    return `<div class="card c-lodging"><b>🏠 ${label}</b> <span class="meta">${nights} nights${bset["label"+k]?` · ${esc(bset["label"+k])}`:""} · "Stay" and "Per person" use these nights and ${n} people</span>
-      <div class="tbl"><table><thead><tr><th>Listing</th><th>Status</th><th>Min nights</th><th>Price</th><th>Price is</th><th>Per night</th><th>Stay</th><th>Per person</th><th>Bedrooms</th><th>Beds</th><th>Baths</th><th>Beach</th><th>Parking</th><th>Rating</th><th>Votes</th><th>Link</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="17" class="empty">No listings yet.</td></tr>`}</tbody></table></div>
+    return `<div class="card c-lodging"><b>🏠 ${label}</b> <span class="meta">${nights} nights${bset["label"+k]?` · ${esc(bset["label"+k])}`:""}</span>
+      <div class="tbl"><table><thead><tr><th>Listing</th><th>Status</th><th>Min nights</th><th>Price</th><th>Price is</th><th>Per night</th><th>Stay</th><th>Per person</th><th>Bedrooms</th><th>Beds</th><th>Baths</th><th>Beach</th><th>Parking</th><th>Rating</th><th>Votes</th><th>Notes</th><th>Link</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="18" class="empty">No listings yet.</td></tr>`}</tbody></table></div>
       <div class="actions"><button class="btn small" data-do="addAir" data-reg="${reg}">+ Add ${label} listing</button></div></div>`;
   }).join("");
 }
@@ -674,10 +689,55 @@ async function onBudgetClick(e){
     if(d.do==="gotoTab") return document.querySelector(`#nav [data-t="${d.to}"]`).click();
     if(d.do==="vote"){ const x = bAir.find(z => z.id===d.id); if(x) await updateDoc(doc(...tripRef("budget_airbnb",d.id)), { votes:(x.votes||[]).includes(me) ? arrayRemove(me) : arrayUnion(me) }); }
     if(d.do==="delete" && confirm("Delete this row?")) await deleteDoc(doc(...tripRef(d.col,d.id)));
+    if(d.do==="importOld"){
+      const old = oldLodging(); if(!old.length) return;
+      const wb = writeBatch(db);
+      old.forEach((o,i) => {
+        const notes = [o.notes, o.date && `Dates: ${o.date}`, o.cost && `Cost: ${o.cost}`, o.who && `Who: ${o.who}`].filter(Boolean).join(" · ");
+        wb.set(doc(...tripRef("budget_airbnb","old-"+o.id)), { region:"sj", name:o.title||"Untitled", minDays:1, price:0, priceType:"night", status:["Idea","Considering","Booked"].includes(o.status)?o.status:"Idea", votes:o.votes||[], bedrooms:null, beds:null, baths:null, beach:"", parking:"", rating:null, link:o.link||"", notes, order:Date.now()+i, addedBy:o.addedBy||me });
+      });
+      await wb.commit();
+    }
     if(d.do==="addVan") await addDoc(collection(...tripRef("budget_van")), { name:"New line", rate:0, qty:null, note:"", order:Date.now() });
     if(d.do==="addAir") openLodgingForm(d.reg||"sj");
   }catch(err){ showErr(err); }
 }
+
+/* ---------- Fit tables to the window: boxes grow to show all their text, and the whole table (font + boxes) scales down to fit ---------- */
+const FIT_MIN = 0.55;                       // below this, the table scrolls sideways instead
+const FIELD_MAX = { name:380, title:380, notes:260, link:90, parking:140 };
+let _cx = null;
+function textW(el, txt){
+  _cx = _cx || document.createElement("canvas").getContext("2d"); const cs = getComputedStyle(el);
+  _cx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const ls = parseFloat(cs.letterSpacing)||0, ws = parseFloat(cs.wordSpacing)||0;
+  return _cx.measureText(txt).width + txt.length*ls + (txt.split(" ").length-1)*ws;
+}
+function autosize(el){
+  const cs = getComputedStyle(el);
+  const pad = [cs.paddingLeft,cs.paddingRight,cs.borderLeftWidth,cs.borderRightWidth].reduce((a,v)=>a+(parseFloat(v)||0),0);
+  const txt = String(el.value || el.placeholder || ""), isNum = el.type==="number";
+  const max = FIELD_MAX[el.dataset.field || ""] || 220, min = isNum ? 64 : 64;
+  el.style.width = Math.min(max, Math.max(min, Math.ceil(textW(el,txt) + pad + 10 + (isNum ? 20 : 0)))) + "px";
+}
+function fitTables(){
+  const zoomOK = typeof CSS !== "undefined" && CSS.supports && CSS.supports("zoom","1");
+  document.querySelectorAll("#app .tbl").forEach(box => {
+    let fit = box.firstElementChild;
+    if(!fit || !fit.classList.contains("fit")){ fit = document.createElement("div"); fit.className = "fit"; while(box.firstChild) fit.appendChild(box.firstChild); box.appendChild(fit); }
+    fit.style.zoom = "1";
+    fit.querySelectorAll("input").forEach(autosize);
+    if(!zoomOK) return;
+    const natural = fit.scrollWidth, avail = box.clientWidth;
+    fit.style.zoom = natural > avail ? String(Math.max(FIT_MIN, avail/natural)) : "1";
+  });
+}
+let _fitQ = 0; const queueFit = () => { cancelAnimationFrame(_fitQ); _fitQ = requestAnimationFrame(fitTables); };
+new MutationObserver(queueFit).observe($app, { childList:true, subtree:true });
+new MutationObserver(queueFit).observe(document.body, { attributes:true, attributeFilter:["class"] });
+window.addEventListener("resize", queueFit); window.addEventListener("orientationchange", queueFit);
+document.addEventListener("input", e => { if(e.target.closest && e.target.closest(".tbl")) queueFit(); });
+if(document.fonts){ document.fonts.ready.then(queueFit); document.fonts.addEventListener && document.fonts.addEventListener("loadingdone", queueFit); }
 
 boot();
 </script>
