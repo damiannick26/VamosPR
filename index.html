@@ -143,8 +143,8 @@ const CATS = {
   transport: { label:"Transport",   icon:"🚗", titlePh:"e.g. Rental car from SJU",        dateLabel:"Date",  statuses:["Idea","Considering","Booked"] },
   flights:   { label:"Flights",     icon:"✈️", titlePh:"e.g. CLE → SJU, Feb 9",           dateLabel:"Date",  statuses:["Idea","Considering","Booked"] },
   activities:{ label:"Activities",  icon:"🤿", titlePh:"e.g. Kayak the bioluminescent bay", dateLabel:"Date", statuses:["Idea","Planned","Booked","Done"] },
-  places:    { label:"Places",      icon:"🏝️", titlePh:"e.g. El Yunque",                  dateLabel:"When",  statuses:["Idea","Planned","Booked","Done"] },
-  food:      { label:"Restaurants", icon:"🍹", titlePh:"e.g. Lechonera in Guavate",       dateLabel:"When",  statuses:["Idea","Planned","Booked","Done"] },
+  places:    { label:"Must see",    icon:"🏝️", titlePh:"e.g. El Yunque",                  dateLabel:"When",  statuses:["Idea","Planned","Booked","Done"] },
+  food:      { label:"Food/Drink",   icon:"🍹", titlePh:"e.g. Lechonera in Guavate",       dateLabel:"When",  statuses:["Idea","Planned","Booked","Done"] },
 };
 const TABS = ["chat","overview","budget",...Object.keys(CATS)];
 const TAB_LABEL = { chat:"💬 Chat", overview:"🗺️ Overview", budget:"💰 Budget", ...Object.fromEntries(Object.entries(CATS).map(([k,v])=>[k,v.icon+" "+v.label])) };
@@ -403,7 +403,7 @@ function catBlock(cat, item, n, removable){
 function openForm(cat, item=null){
   const C = CATS[cat]; editing = {cat, id:item?.id};
   const f = document.getElementById("form");
-  f.innerHTML = `<div class="card c-${cat}"><b>${item?"Edit":"New"} ${C.label}</b>
+  f.innerHTML = `<div class="card c-${cat}"><b>${item?"Edit":"New"} · ${C.label}</b>
     <div class="meta">Only Booked items count toward the 💰 Budget.${item?"":" Tab past the last field to add another entry."}</div>
     <div id="entries">${catBlock(cat,item,1,false)}</div>
     <div class="actions"><button class="btn" id="f_save">💾 ${item?"Save":"Save all"}</button>${item?"":`<button class="btn ghost" id="f_more" type="button">+ Add another entry</button>`}<button class="btn ghost" id="f_cancel">Cancel</button></div></div>`;
